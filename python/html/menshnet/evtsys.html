@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1" />
+<meta name="generator" content="pdoc 0.7.2" />
+<title>menshnet.evtsys API documentation</title>
+<meta name="description" content="Networking module for library, this leverages mqtt and requests" />
+<link href='https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.0/normalize.min.css' rel='stylesheet'>
+<link href='https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/8.0.0/sanitize.min.css' rel='stylesheet'>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/github.min.css" rel="stylesheet">
+<style>.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:30px;overflow:hidden}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:1em 0 .50em 0}h3{font-size:1.4em;margin:25px 0 10px 0}h4{margin:0;font-size:105%}a{color:#058;text-decoration:none;transition:color .3s ease-in-out}a:hover{color:#e82}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900}pre code{background:#f8f8f8;font-size:.8em;line-height:1.4em}code{background:#f2f2f1;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{background:#f8f8f8;border:0;border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0;padding:1ex}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{font-weight:bold}#index h4 + ul{margin-bottom:.6em}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-weight:bold;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}.admonition{padding:.1em .5em;margin-bottom:1em}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.item .name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul{padding-left:1.5em}.toc > ul > li{margin-top:.5em}}</style>
+<style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+</head>
+<body>
+<main>
+<article id="content">
+<header>
+<h1 class="title">Module <code>menshnet.evtsys</code></h1>
+</header>
+<section id="section-intro">
+<p>Networking module for library, this leverages mqtt and requests</p>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">&#34;&#34;&#34;
+Networking module for library, this leverages mqtt and requests
+&#34;&#34;&#34;
+
+import paho.mqtt.client as mqtt
+import queue
+import requests
+import json
+import threading
+import uuid
+import logging
+
+
+REMOTE_HOST=&#34;menshnet.online&#34;
+
+VALIDATE_API_URL=&#34;https://menshnet.online/landing/api&#34;
+
+
+class MqttTransaction(object):
+    &#34;&#34;&#34;
+         Sender              MQTT   Receiver
+           
+         create response
+         topic, subscribe ----&gt;|
+
+         subscribed.      &lt;----
+         send message     -----+----&gt; process message
+                                      send reply to reply
+                                      topic
+         route response
+         end transaction &lt;-----+-----
+
+         unsubscribe to
+         response topic  -----&gt;| 
+
+    &#34;&#34;&#34;
+    def __init__(self, messenger, topic, data):
+        self.messenger = messenger
+        self.topic = topic
+        self.data = data
+        self.error = None
+        self.complete = threading.Event()
+        self.log = logging.getLogger(&#34;menshnet&#34;)
+        self.reply = None
+
+    # 
+    # user defined event handlers
+    #
+    def on_result(self, mqtt_msg_payload):
+        self.reply = mqtt_msg_payload
+
+    def on_success(self):
+        pass
+        
+    def on_failure(self, error):
+        self.log.error(error)
+    #############################
+    
+
+
+    def wait_for_completion(self, timeout):
+        &#34;wait for transaction to complete or timeout&#34;
+        if self.complete.wait(timeout):
+            if self.error:
+                self.on_failure(self.error)
+            else:
+                self.on_success()
+        else:
+            self.on_failure(&#34;timeout&#34;)          
+
+    def on_error(self, msg):
+        &#34;route error to on_failure set complete mutex&#34;
+        self.error = msg         
+        self.complete.set()
+
+        # remove if reply topic exists
+        if self.data.get(&#39;reply_topic&#39;): 
+            self.messenger.mqttc.message_callback_remove(self.data[&#39;reply_topic&#39;])
+            self.messenger.mqttc.unsubscribe(self.data[&#39;reply_topic&#39;])
+
+    def reply_handler(self, client, userdata, msg):
+        &#34;route inbound message to on_result&#34;
+        self.log.debug(&#34;received reply from remote service&#34;)
+        
+        self.on_result(msg.payload)
+          
+        self.messenger.mqttc.message_callback_remove(self.data[&#39;reply_topic&#39;])
+        self.messenger.mqttc.unsubscribe(self.data[&#39;reply_topic&#39;]) 
+
+        # unblock and synchronous caller.
+        self.complete.set()
+
+
+    def when_subscribed(self, mid):
+        self.log.debug(&#34;reply topic has subscribed, sending message&#34;)
+        # route response reply_topic to reply_handler
+        self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
+
+        # send to remote host
+        self.messenger.send(self.topic, self.data)
+
+        # remove deferred reference.
+        if mid in self.messenger.deferred: 
+            del self.messenger.deferred[mid]
+         
+
+    def begin(self):
+        &#34;begin transaction&#34;
+        self.log.debug(&#34;Beginning transaction&#34;)
+        
+
+        if not self.messenger.mqttc:
+            self.on_error(&#34;mqtt not initialized&#34;) 
+            return
+
+        # reply_topic -&gt; menshnet/client/&lt;username&gt;/tx-reply/&lt;uuid&gt;
+        self.data[&#39;reply_topic&#39;] = self.messenger.topic_base+&#34;/tx-reply/&#34;+str(uuid.uuid4()) 
+
+        # subscribe to topic
+        (sub_result, mid) = self.messenger.mqttc.subscribe(self.data[&#39;reply_topic&#39;])
+        if sub_result == mqtt.MQTT_ERR_NO_CONN:
+            self.on_error(&#34;unable to subscribe no connection&#34;)
+            return
+
+        # defer transaction until subscribed event from mqtt
+        self.messenger.deferred[mid] = lambda *args: self.when_subscribed(mid)
+
+        
+
+
+class Messenger(object):
+    def __init__(self):
+        self.inbound_msgq = queue.Queue()
+        # create a semaphore to block until mqtt connection,
+        # the mqtt client will auto reconnect until success.
+        self.connected = threading.Event()
+        self.connected.clear()     
+        self.on_connected = None
+        self.mqttc = None
+        # functions to be called when subscribed.
+        self.deferred = {}
+        
+    
+    def on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            # if provided call user handler when mqtt has connected.
+            if self.on_connected:
+                self.on_connected()
+            # set connected mutex 
+            self.connected.set()
+       
+    def on_subscribe(self, client, userdata, mid, granted_qos):
+        &#34;mqtt confirms our subscribe request, call trigger&#34;
+        fobj = self.deferred.get(mid)
+        if fobj:
+            fobj()
+
+
+    def send(self, topic, data):
+        if not self.mqttc:
+            raise RuntimeError(&#34;connect must be called before using this method&#34;)
+        self.mqttc.publish(topic,payload=json.dumps(data))
+        
+    def connect(self, mqtt_auth, on_connected):
+        &#34;connect to mqtt using authentication&#34;
+        self.on_connected = on_connected
+        self.mqttc = mqtt.Client(transport=&#34;websockets&#34;)
+        self.mqttc.on_connect = self.on_connect
+        self.mqttc.on_subscribe = self.on_subscribe 
+        self.mqttc.tls_set()
+
+        u = mqtt_auth[&#39;username&#39;]
+        p = mqtt_auth[&#39;pwhash&#39;]
+
+        self.topic_base = &#34;menshnet/user/%s&#34;
+
+        self.mqttc.username_pw_set(u, p)
+        self.mqttc.ws_set_options()
+        self.mqttc.connect(REMOTE_HOST, 443, 60)
+
+        # execute daemon thread for network communications to the
+        # MQTT broker 
+        self.mqttc.loop_start()
+
+
+class EventSystem(object):
+    &#34;&#34;&#34;
+    Wrapper aroung MQTT for messaging.
+    &#34;&#34;&#34;
+    def __init__(self):
+        self.messenger = Messenger()
+
+    def topic_base(self):
+        &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
+        if self.messenger.connected.is_set():
+            return self.messenger.topic_base
+
+    def transaction(self, topic, data, response_handler=None, timeout=15.0, error_handler=None):
+        &#34;&#34;&#34;
+        Handle a transaction either in synchronous mode (blocking) or async. For async
+        response must be a callable object. 
+        &#34;&#34;&#34;
+        tx = MqttTransaction(self.messenger, topic, data)
+
+        # set error handler, default is to just scream at the error log ;)
+        if error_handler:
+            tx.on_failure = error_handler
+        
+        if response_handler:
+            tx.on_response = response_handler
+        
+        tx.begin()
+        if not response_handler:
+            tx.wait_for_completion(timeout)
+
+        # reply will be none if in async mode (response_handler == None)
+        return tx.reply 
+
+
+
+    def connect(self, apiKey, **kwArgs):
+        &#34;&#34;&#34;
+        Authenticate apiKey, enable mqtt communications to topics then
+        connect to mqtt.        
+        &#34;&#34;&#34;
+
+        on_connected = kwArgs.get(&#39;on_connected&#39;)
+        if on_connected and not callable(on_connected):
+            raise ValueError(&#34;When specified on_connected must be a callable object/function&#34;)
+
+        r = requests.post(VALIDATE_API_URL, json={
+            &#34;method&#34;: &#34;validate&#34;,
+            &#34;apiKey&#34;: apiKey
+        })
+        if r.status_code == 403:
+            raise PermissionError(apiKey)
+       
+        elif r.status_code == 200:
+            # validated, get the mqtt authentication information
+            mqtt_auth = json.loads(r.content.decode())
+            self.messenger.connect(mqtt_auth, on_connected)
+            if not on_connected:
+                # synchronous mode, block until connected.
+                self.messenger.connected.wait()
+        else:
+            raise RuntimeError(&#34;HTTP %d Error while validating apiKey &#39;%s&#39;&#34; % (r.status_code,r.content))
+                  
+
+     
+     </code></pre>
+</details>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+</section>
+<section>
+<h2 class="section-title" id="header-classes">Classes</h2>
+<dl>
+<dt id="menshnet.evtsys.EventSystem"><code class="flex name class">
+<span>class <span class="ident">EventSystem</span></span>
+</code></dt>
+<dd>
+<section class="desc"><p>Wrapper aroung MQTT for messaging.</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class EventSystem(object):
+    &#34;&#34;&#34;
+    Wrapper aroung MQTT for messaging.
+    &#34;&#34;&#34;
+    def __init__(self):
+        self.messenger = Messenger()
+
+    def topic_base(self):
+        &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
+        if self.messenger.connected.is_set():
+            return self.messenger.topic_base
+
+    def transaction(self, topic, data, response_handler=None, timeout=15.0, error_handler=None):
+        &#34;&#34;&#34;
+        Handle a transaction either in synchronous mode (blocking) or async. For async
+        response must be a callable object. 
+        &#34;&#34;&#34;
+        tx = MqttTransaction(self.messenger, topic, data)
+
+        # set error handler, default is to just scream at the error log ;)
+        if error_handler:
+            tx.on_failure = error_handler
+        
+        if response_handler:
+            tx.on_response = response_handler
+        
+        tx.begin()
+        if not response_handler:
+            tx.wait_for_completion(timeout)
+
+        # reply will be none if in async mode (response_handler == None)
+        return tx.reply 
+
+
+
+    def connect(self, apiKey, **kwArgs):
+        &#34;&#34;&#34;
+        Authenticate apiKey, enable mqtt communications to topics then
+        connect to mqtt.        
+        &#34;&#34;&#34;
+
+        on_connected = kwArgs.get(&#39;on_connected&#39;)
+        if on_connected and not callable(on_connected):
+            raise ValueError(&#34;When specified on_connected must be a callable object/function&#34;)
+
+        r = requests.post(VALIDATE_API_URL, json={
+            &#34;method&#34;: &#34;validate&#34;,
+            &#34;apiKey&#34;: apiKey
+        })
+        if r.status_code == 403:
+            raise PermissionError(apiKey)
+       
+        elif r.status_code == 200:
+            # validated, get the mqtt authentication information
+            mqtt_auth = json.loads(r.content.decode())
+            self.messenger.connect(mqtt_auth, on_connected)
+            if not on_connected:
+                # synchronous mode, block until connected.
+                self.messenger.connected.wait()
+        else:
+            raise RuntimeError(&#34;HTTP %d Error while validating apiKey &#39;%s&#39;&#34; % (r.status_code,r.content))</code></pre>
+</details>
+<h3>Methods</h3>
+<dl>
+<dt id="menshnet.evtsys.EventSystem.connect"><code class="name flex">
+<span>def <span class="ident">connect</span></span>(<span>self, apiKey, **kwArgs)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Authenticate apiKey, enable mqtt communications to topics then
+connect to mqtt.</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def connect(self, apiKey, **kwArgs):
+    &#34;&#34;&#34;
+    Authenticate apiKey, enable mqtt communications to topics then
+    connect to mqtt.        
+    &#34;&#34;&#34;
+
+    on_connected = kwArgs.get(&#39;on_connected&#39;)
+    if on_connected and not callable(on_connected):
+        raise ValueError(&#34;When specified on_connected must be a callable object/function&#34;)
+
+    r = requests.post(VALIDATE_API_URL, json={
+        &#34;method&#34;: &#34;validate&#34;,
+        &#34;apiKey&#34;: apiKey
+    })
+    if r.status_code == 403:
+        raise PermissionError(apiKey)
+   
+    elif r.status_code == 200:
+        # validated, get the mqtt authentication information
+        mqtt_auth = json.loads(r.content.decode())
+        self.messenger.connect(mqtt_auth, on_connected)
+        if not on_connected:
+            # synchronous mode, block until connected.
+            self.messenger.connected.wait()
+    else:
+        raise RuntimeError(&#34;HTTP %d Error while validating apiKey &#39;%s&#39;&#34; % (r.status_code,r.content))</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.EventSystem.topic_base"><code class="name flex">
+<span>def <span class="ident">topic_base</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>return base topic path allocated for this user: menshnet/client/<username>/#</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def topic_base(self):
+    &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
+    if self.messenger.connected.is_set():
+        return self.messenger.topic_base</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.EventSystem.transaction"><code class="name flex">
+<span>def <span class="ident">transaction</span></span>(<span>self, topic, data, response_handler=None, timeout=15.0, error_handler=None)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Handle a transaction either in synchronous mode (blocking) or async. For async
+response must be a callable object.</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def transaction(self, topic, data, response_handler=None, timeout=15.0, error_handler=None):
+    &#34;&#34;&#34;
+    Handle a transaction either in synchronous mode (blocking) or async. For async
+    response must be a callable object. 
+    &#34;&#34;&#34;
+    tx = MqttTransaction(self.messenger, topic, data)
+
+    # set error handler, default is to just scream at the error log ;)
+    if error_handler:
+        tx.on_failure = error_handler
+    
+    if response_handler:
+        tx.on_response = response_handler
+    
+    tx.begin()
+    if not response_handler:
+        tx.wait_for_completion(timeout)
+
+    # reply will be none if in async mode (response_handler == None)
+    return tx.reply </code></pre>
+</details>
+</dd>
+</dl>
+</dd>
+<dt id="menshnet.evtsys.Messenger"><code class="flex name class">
+<span>class <span class="ident">Messenger</span></span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class Messenger(object):
+    def __init__(self):
+        self.inbound_msgq = queue.Queue()
+        # create a semaphore to block until mqtt connection,
+        # the mqtt client will auto reconnect until success.
+        self.connected = threading.Event()
+        self.connected.clear()     
+        self.on_connected = None
+        self.mqttc = None
+        # functions to be called when subscribed.
+        self.deferred = {}
+        
+    
+    def on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            # if provided call user handler when mqtt has connected.
+            if self.on_connected:
+                self.on_connected()
+            # set connected mutex 
+            self.connected.set()
+       
+    def on_subscribe(self, client, userdata, mid, granted_qos):
+        &#34;mqtt confirms our subscribe request, call trigger&#34;
+        fobj = self.deferred.get(mid)
+        if fobj:
+            fobj()
+
+
+    def send(self, topic, data):
+        if not self.mqttc:
+            raise RuntimeError(&#34;connect must be called before using this method&#34;)
+        self.mqttc.publish(topic,payload=json.dumps(data))
+        
+    def connect(self, mqtt_auth, on_connected):
+        &#34;connect to mqtt using authentication&#34;
+        self.on_connected = on_connected
+        self.mqttc = mqtt.Client(transport=&#34;websockets&#34;)
+        self.mqttc.on_connect = self.on_connect
+        self.mqttc.on_subscribe = self.on_subscribe 
+        self.mqttc.tls_set()
+
+        u = mqtt_auth[&#39;username&#39;]
+        p = mqtt_auth[&#39;pwhash&#39;]
+
+        self.topic_base = &#34;menshnet/user/%s&#34;
+
+        self.mqttc.username_pw_set(u, p)
+        self.mqttc.ws_set_options()
+        self.mqttc.connect(REMOTE_HOST, 443, 60)
+
+        # execute daemon thread for network communications to the
+        # MQTT broker 
+        self.mqttc.loop_start()</code></pre>
+</details>
+<h3>Methods</h3>
+<dl>
+<dt id="menshnet.evtsys.Messenger.connect"><code class="name flex">
+<span>def <span class="ident">connect</span></span>(<span>self, mqtt_auth, on_connected)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>connect to mqtt using authentication</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def connect(self, mqtt_auth, on_connected):
+    &#34;connect to mqtt using authentication&#34;
+    self.on_connected = on_connected
+    self.mqttc = mqtt.Client(transport=&#34;websockets&#34;)
+    self.mqttc.on_connect = self.on_connect
+    self.mqttc.on_subscribe = self.on_subscribe 
+    self.mqttc.tls_set()
+
+    u = mqtt_auth[&#39;username&#39;]
+    p = mqtt_auth[&#39;pwhash&#39;]
+
+    self.topic_base = &#34;menshnet/user/%s&#34;
+
+    self.mqttc.username_pw_set(u, p)
+    self.mqttc.ws_set_options()
+    self.mqttc.connect(REMOTE_HOST, 443, 60)
+
+    # execute daemon thread for network communications to the
+    # MQTT broker 
+    self.mqttc.loop_start()</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.Messenger.on_connect"><code class="name flex">
+<span>def <span class="ident">on_connect</span></span>(<span>self, client, userdata, flags, rc)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def on_connect(self, client, userdata, flags, rc):
+    if rc == 0:
+        # if provided call user handler when mqtt has connected.
+        if self.on_connected:
+            self.on_connected()
+        # set connected mutex 
+        self.connected.set()</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.Messenger.on_subscribe"><code class="name flex">
+<span>def <span class="ident">on_subscribe</span></span>(<span>self, client, userdata, mid, granted_qos)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>mqtt confirms our subscribe request, call trigger</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def on_subscribe(self, client, userdata, mid, granted_qos):
+    &#34;mqtt confirms our subscribe request, call trigger&#34;
+    fobj = self.deferred.get(mid)
+    if fobj:
+        fobj()</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.Messenger.send"><code class="name flex">
+<span>def <span class="ident">send</span></span>(<span>self, topic, data)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def send(self, topic, data):
+    if not self.mqttc:
+        raise RuntimeError(&#34;connect must be called before using this method&#34;)
+    self.mqttc.publish(topic,payload=json.dumps(data))</code></pre>
+</details>
+</dd>
+</dl>
+</dd>
+<dt id="menshnet.evtsys.MqttTransaction"><code class="flex name class">
+<span>class <span class="ident">MqttTransaction</span></span>
+<span>(</span><span>messenger, topic, data)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Sender
+MQTT
+Receiver</p>
+<p>create response
+topic, subscribe ----&gt;|</p>
+<p>subscribed.
+&lt;----
+send message
+-----+----&gt; process message
+send reply to reply
+topic
+route response
+end transaction &lt;-----+-----</p>
+<p>unsubscribe to
+response topic
+-----&gt;|</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class MqttTransaction(object):
+    &#34;&#34;&#34;
+         Sender              MQTT   Receiver
+           
+         create response
+         topic, subscribe ----&gt;|
+
+         subscribed.      &lt;----
+         send message     -----+----&gt; process message
+                                      send reply to reply
+                                      topic
+         route response
+         end transaction &lt;-----+-----
+
+         unsubscribe to
+         response topic  -----&gt;| 
+
+    &#34;&#34;&#34;
+    def __init__(self, messenger, topic, data):
+        self.messenger = messenger
+        self.topic = topic
+        self.data = data
+        self.error = None
+        self.complete = threading.Event()
+        self.log = logging.getLogger(&#34;menshnet&#34;)
+        self.reply = None
+
+    # 
+    # user defined event handlers
+    #
+    def on_result(self, mqtt_msg_payload):
+        self.reply = mqtt_msg_payload
+
+    def on_success(self):
+        pass
+        
+    def on_failure(self, error):
+        self.log.error(error)
+    #############################
+    
+
+
+    def wait_for_completion(self, timeout):
+        &#34;wait for transaction to complete or timeout&#34;
+        if self.complete.wait(timeout):
+            if self.error:
+                self.on_failure(self.error)
+            else:
+                self.on_success()
+        else:
+            self.on_failure(&#34;timeout&#34;)          
+
+    def on_error(self, msg):
+        &#34;route error to on_failure set complete mutex&#34;
+        self.error = msg         
+        self.complete.set()
+
+        # remove if reply topic exists
+        if self.data.get(&#39;reply_topic&#39;): 
+            self.messenger.mqttc.message_callback_remove(self.data[&#39;reply_topic&#39;])
+            self.messenger.mqttc.unsubscribe(self.data[&#39;reply_topic&#39;])
+
+    def reply_handler(self, client, userdata, msg):
+        &#34;route inbound message to on_result&#34;
+        self.log.debug(&#34;received reply from remote service&#34;)
+        
+        self.on_result(msg.payload)
+          
+        self.messenger.mqttc.message_callback_remove(self.data[&#39;reply_topic&#39;])
+        self.messenger.mqttc.unsubscribe(self.data[&#39;reply_topic&#39;]) 
+
+        # unblock and synchronous caller.
+        self.complete.set()
+
+
+    def when_subscribed(self, mid):
+        self.log.debug(&#34;reply topic has subscribed, sending message&#34;)
+        # route response reply_topic to reply_handler
+        self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
+
+        # send to remote host
+        self.messenger.send(self.topic, self.data)
+
+        # remove deferred reference.
+        if mid in self.messenger.deferred: 
+            del self.messenger.deferred[mid]
+         
+
+    def begin(self):
+        &#34;begin transaction&#34;
+        self.log.debug(&#34;Beginning transaction&#34;)
+        
+
+        if not self.messenger.mqttc:
+            self.on_error(&#34;mqtt not initialized&#34;) 
+            return
+
+        # reply_topic -&gt; menshnet/client/&lt;username&gt;/tx-reply/&lt;uuid&gt;
+        self.data[&#39;reply_topic&#39;] = self.messenger.topic_base+&#34;/tx-reply/&#34;+str(uuid.uuid4()) 
+
+        # subscribe to topic
+        (sub_result, mid) = self.messenger.mqttc.subscribe(self.data[&#39;reply_topic&#39;])
+        if sub_result == mqtt.MQTT_ERR_NO_CONN:
+            self.on_error(&#34;unable to subscribe no connection&#34;)
+            return
+
+        # defer transaction until subscribed event from mqtt
+        self.messenger.deferred[mid] = lambda *args: self.when_subscribed(mid)</code></pre>
+</details>
+<h3>Methods</h3>
+<dl>
+<dt id="menshnet.evtsys.MqttTransaction.begin"><code class="name flex">
+<span>def <span class="ident">begin</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>begin transaction</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def begin(self):
+    &#34;begin transaction&#34;
+    self.log.debug(&#34;Beginning transaction&#34;)
+    
+
+    if not self.messenger.mqttc:
+        self.on_error(&#34;mqtt not initialized&#34;) 
+        return
+
+    # reply_topic -&gt; menshnet/client/&lt;username&gt;/tx-reply/&lt;uuid&gt;
+    self.data[&#39;reply_topic&#39;] = self.messenger.topic_base+&#34;/tx-reply/&#34;+str(uuid.uuid4()) 
+
+    # subscribe to topic
+    (sub_result, mid) = self.messenger.mqttc.subscribe(self.data[&#39;reply_topic&#39;])
+    if sub_result == mqtt.MQTT_ERR_NO_CONN:
+        self.on_error(&#34;unable to subscribe no connection&#34;)
+        return
+
+    # defer transaction until subscribed event from mqtt
+    self.messenger.deferred[mid] = lambda *args: self.when_subscribed(mid)</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.MqttTransaction.on_error"><code class="name flex">
+<span>def <span class="ident">on_error</span></span>(<span>self, msg)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>route error to on_failure set complete mutex</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def on_error(self, msg):
+    &#34;route error to on_failure set complete mutex&#34;
+    self.error = msg         
+    self.complete.set()
+
+    # remove if reply topic exists
+    if self.data.get(&#39;reply_topic&#39;): 
+        self.messenger.mqttc.message_callback_remove(self.data[&#39;reply_topic&#39;])
+        self.messenger.mqttc.unsubscribe(self.data[&#39;reply_topic&#39;])</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.MqttTransaction.on_failure"><code class="name flex">
+<span>def <span class="ident">on_failure</span></span>(<span>self, error)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def on_failure(self, error):
+    self.log.error(error)</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.MqttTransaction.on_result"><code class="name flex">
+<span>def <span class="ident">on_result</span></span>(<span>self, mqtt_msg_payload)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def on_result(self, mqtt_msg_payload):
+    self.reply = mqtt_msg_payload</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.MqttTransaction.on_success"><code class="name flex">
+<span>def <span class="ident">on_success</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def on_success(self):
+    pass</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.MqttTransaction.reply_handler"><code class="name flex">
+<span>def <span class="ident">reply_handler</span></span>(<span>self, client, userdata, msg)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>route inbound message to on_result</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def reply_handler(self, client, userdata, msg):
+    &#34;route inbound message to on_result&#34;
+    self.log.debug(&#34;received reply from remote service&#34;)
+    
+    self.on_result(msg.payload)
+      
+    self.messenger.mqttc.message_callback_remove(self.data[&#39;reply_topic&#39;])
+    self.messenger.mqttc.unsubscribe(self.data[&#39;reply_topic&#39;]) 
+
+    # unblock and synchronous caller.
+    self.complete.set()</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.MqttTransaction.wait_for_completion"><code class="name flex">
+<span>def <span class="ident">wait_for_completion</span></span>(<span>self, timeout)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>wait for transaction to complete or timeout</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def wait_for_completion(self, timeout):
+    &#34;wait for transaction to complete or timeout&#34;
+    if self.complete.wait(timeout):
+        if self.error:
+            self.on_failure(self.error)
+        else:
+            self.on_success()
+    else:
+        self.on_failure(&#34;timeout&#34;)          </code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.MqttTransaction.when_subscribed"><code class="name flex">
+<span>def <span class="ident">when_subscribed</span></span>(<span>self, mid)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def when_subscribed(self, mid):
+    self.log.debug(&#34;reply topic has subscribed, sending message&#34;)
+    # route response reply_topic to reply_handler
+    self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
+
+    # send to remote host
+    self.messenger.send(self.topic, self.data)
+
+    # remove deferred reference.
+    if mid in self.messenger.deferred: 
+        del self.messenger.deferred[mid]</code></pre>
+</details>
+</dd>
+</dl>
+</dd>
+</dl>
+</section>
+</article>
+<nav id="sidebar">
+<h1>Index</h1>
+<div class="toc">
+<ul></ul>
+</div>
+<ul id="index">
+<li><h3>Super-module</h3>
+<ul>
+<li><code><a title="menshnet" href="index.html">menshnet</a></code></li>
+</ul>
+</li>
+<li><h3><a href="#header-classes">Classes</a></h3>
+<ul>
+<li>
+<h4><code><a title="menshnet.evtsys.EventSystem" href="#menshnet.evtsys.EventSystem">EventSystem</a></code></h4>
+<ul class="">
+<li><code><a title="menshnet.evtsys.EventSystem.connect" href="#menshnet.evtsys.EventSystem.connect">connect</a></code></li>
+<li><code><a title="menshnet.evtsys.EventSystem.topic_base" href="#menshnet.evtsys.EventSystem.topic_base">topic_base</a></code></li>
+<li><code><a title="menshnet.evtsys.EventSystem.transaction" href="#menshnet.evtsys.EventSystem.transaction">transaction</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="menshnet.evtsys.Messenger" href="#menshnet.evtsys.Messenger">Messenger</a></code></h4>
+<ul class="">
+<li><code><a title="menshnet.evtsys.Messenger.connect" href="#menshnet.evtsys.Messenger.connect">connect</a></code></li>
+<li><code><a title="menshnet.evtsys.Messenger.on_connect" href="#menshnet.evtsys.Messenger.on_connect">on_connect</a></code></li>
+<li><code><a title="menshnet.evtsys.Messenger.on_subscribe" href="#menshnet.evtsys.Messenger.on_subscribe">on_subscribe</a></code></li>
+<li><code><a title="menshnet.evtsys.Messenger.send" href="#menshnet.evtsys.Messenger.send">send</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="menshnet.evtsys.MqttTransaction" href="#menshnet.evtsys.MqttTransaction">MqttTransaction</a></code></h4>
+<ul class="two-column">
+<li><code><a title="menshnet.evtsys.MqttTransaction.begin" href="#menshnet.evtsys.MqttTransaction.begin">begin</a></code></li>
+<li><code><a title="menshnet.evtsys.MqttTransaction.on_error" href="#menshnet.evtsys.MqttTransaction.on_error">on_error</a></code></li>
+<li><code><a title="menshnet.evtsys.MqttTransaction.on_failure" href="#menshnet.evtsys.MqttTransaction.on_failure">on_failure</a></code></li>
+<li><code><a title="menshnet.evtsys.MqttTransaction.on_result" href="#menshnet.evtsys.MqttTransaction.on_result">on_result</a></code></li>
+<li><code><a title="menshnet.evtsys.MqttTransaction.on_success" href="#menshnet.evtsys.MqttTransaction.on_success">on_success</a></code></li>
+<li><code><a title="menshnet.evtsys.MqttTransaction.reply_handler" href="#menshnet.evtsys.MqttTransaction.reply_handler">reply_handler</a></code></li>
+<li><code><a title="menshnet.evtsys.MqttTransaction.wait_for_completion" href="#menshnet.evtsys.MqttTransaction.wait_for_completion">wait_for_completion</a></code></li>
+<li><code><a title="menshnet.evtsys.MqttTransaction.when_subscribed" href="#menshnet.evtsys.MqttTransaction.when_subscribed">when_subscribed</a></code></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</nav>
+</main>
+<footer id="footer">
+<p>Generated by <a href="https://pdoc3.github.io/pdoc"><cite>pdoc</cite> 0.7.2</a>.</p>
+</footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
+<script>hljs.initHighlightingOnLoad()</script>
+</body>
+</html>
