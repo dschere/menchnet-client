@@ -52,18 +52,19 @@ class Client(object):
     def __init__(self):
         self.evs = EventSystem()
     
-    def connect(self, apiKey, **kwArgs):
+    def connect(self, apiKey, user, **kwArgs):
         &#34;&#34;&#34;
         Validate apiKey then connect to mqtt for communications.
 
         apiKey: string obtained by logging into the menshnet site.
-        
+        user:   username associated with your menshnet account        
+
         optional parameters:
 
             on_connected: a function to be called when connected, if specified
                           connect() becomes asynchronous.
         &#34;&#34;&#34;
-        self.evs.connect(apiKey, **kwArgs)
+        self.evs.connect(apiKey, user, **kwArgs)
         
     def load(self, name, **kwArgs):
         &#34;&#34;&#34;
@@ -138,18 +139,19 @@ server.</p>
     def __init__(self):
         self.evs = EventSystem()
     
-    def connect(self, apiKey, **kwArgs):
+    def connect(self, apiKey, user, **kwArgs):
         &#34;&#34;&#34;
         Validate apiKey then connect to mqtt for communications.
 
         apiKey: string obtained by logging into the menshnet site.
-        
+        user:   username associated with your menshnet account        
+
         optional parameters:
 
             on_connected: a function to be called when connected, if specified
                           connect() becomes asynchronous.
         &#34;&#34;&#34;
-        self.evs.connect(apiKey, **kwArgs)
+        self.evs.connect(apiKey, user, **kwArgs)
         
     def load(self, name, **kwArgs):
         &#34;&#34;&#34;
@@ -182,11 +184,14 @@ server.</p>
 <h3>Methods</h3>
 <dl>
 <dt id="menshnet.client.Client.connect"><code class="name flex">
-<span>def <span class="ident">connect</span></span>(<span>self, apiKey, **kwArgs)</span>
+<span>def <span class="ident">connect</span></span>(<span>self, apiKey, user, **kwArgs)</span>
 </code></dt>
 <dd>
 <section class="desc"><p>Validate apiKey then connect to mqtt for communications.</p>
-<p>apiKey: string obtained by logging into the menshnet site.</p>
+<p>apiKey: string obtained by logging into the menshnet site.
+user:
+username associated with your menshnet account
+</p>
 <p>optional parameters:</p>
 <pre><code>on_connected: a function to be called when connected, if specified
               connect() becomes asynchronous.
@@ -195,18 +200,19 @@ server.</p>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def connect(self, apiKey, **kwArgs):
+<pre><code class="python">def connect(self, apiKey, user, **kwArgs):
     &#34;&#34;&#34;
     Validate apiKey then connect to mqtt for communications.
 
     apiKey: string obtained by logging into the menshnet site.
-    
+    user:   username associated with your menshnet account        
+
     optional parameters:
 
         on_connected: a function to be called when connected, if specified
                       connect() becomes asynchronous.
     &#34;&#34;&#34;
-    self.evs.connect(apiKey, **kwArgs)</code></pre>
+    self.evs.connect(apiKey, user, **kwArgs)</code></pre>
 </details>
 </dd>
 <dt id="menshnet.client.Client.load"><code class="name flex">

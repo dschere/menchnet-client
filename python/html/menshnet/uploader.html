@@ -51,7 +51,7 @@ def _upload_filename(client, filename, class_name, **kwArgs):
     except:
         raise IOError(&#34;unable to open &#34;+filename+&#34; for reading&#34;)
 
-    topic = evs.topic_base()+&#34;/upload-file&#34;
+    topic = evs.topic_base()+&#34;/upload_filename&#34;
     data = {
         &#34;class_name&#34;: class_name,
         &#34;code&#34;: code  

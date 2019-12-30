@@ -36,11 +36,17 @@ import json
 import threading
 import uuid
 import logging
-
+import os
 
 REMOTE_HOST=&#34;menshnet.online&#34;
+VALIDATE_API_URL=&#34;https://menshnet.online/landing/api/access-mqtt&#34;
 
-VALIDATE_API_URL=&#34;https://menshnet.online/landing/api&#34;
+if os.environ.get(&#34;MENSHNET_UNITTEST&#34;):
+    REMOTE_HOST=&#34;localhost&#34;
+    VALIDATE_API_URL=&#34;http://localhost:20000/api/access-mqtt&#34;
+
+
+Logger = logging.getLogger(&#34;menshnet&#34;)
 
 
 class MqttTransaction(object):
@@ -67,7 +73,6 @@ class MqttTransaction(object):
         self.data = data
         self.error = None
         self.complete = threading.Event()
-        self.log = logging.getLogger(&#34;menshnet&#34;)
         self.reply = None
 
     # 
@@ -80,13 +85,14 @@ class MqttTransaction(object):
         pass
         
     def on_failure(self, error):
-        self.log.error(error)
+        Logger.error(error)
     #############################
     
 
 
     def wait_for_completion(self, timeout):
         &#34;wait for transaction to complete or timeout&#34;
+        Logger.info(&#34;waiting for completion&#34;)
         if self.complete.wait(timeout):
             if self.error:
                 self.on_failure(self.error)
@@ -97,6 +103,7 @@ class MqttTransaction(object):
 
     def on_error(self, msg):
         &#34;route error to on_failure set complete mutex&#34;
+        Logger.error(&#34;on_error: &#34; + msg)
         self.error = msg         
         self.complete.set()
 
@@ -107,7 +114,7 @@ class MqttTransaction(object):
 
     def reply_handler(self, client, userdata, msg):
         &#34;route inbound message to on_result&#34;
-        self.log.debug(&#34;received reply from remote service&#34;)
+        Logger.debug(&#34;received reply from remote service&#34;)
         
         self.on_result(msg.payload)
           
@@ -119,7 +126,7 @@ class MqttTransaction(object):
 
 
     def when_subscribed(self, mid):
-        self.log.debug(&#34;reply topic has subscribed, sending message&#34;)
+        Logger.debug(&#34;reply topic has subscribed, sending message&#34;)
         # route response reply_topic to reply_handler
         self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
 
@@ -133,7 +140,7 @@ class MqttTransaction(object):
 
     def begin(self):
         &#34;begin transaction&#34;
-        self.log.debug(&#34;Beginning transaction&#34;)
+        Logger.debug(&#34;Beginning transaction&#34;)
         
 
         if not self.messenger.mqttc:
@@ -180,6 +187,7 @@ class Messenger(object):
         &#34;mqtt confirms our subscribe request, call trigger&#34;
         fobj = self.deferred.get(mid)
         if fobj:
+            Logger.debug(&#34;topic subscribed to, calling deferred function&#34;)
             fobj()
 
 
@@ -190,13 +198,14 @@ class Messenger(object):
         
     def connect(self, mqtt_auth, on_connected):
         &#34;connect to mqtt using authentication&#34;
+        Logger.debug(&#34;connecting to mqtt using credentials&#34;)
         self.on_connected = on_connected
         self.mqttc = mqtt.Client(transport=&#34;websockets&#34;)
         self.mqttc.on_connect = self.on_connect
         self.mqttc.on_subscribe = self.on_subscribe 
         self.mqttc.tls_set()
 
-        u = mqtt_auth[&#39;username&#39;]
+        u = mqtt_auth[&#39;name&#39;]
         p = mqtt_auth[&#39;pwhash&#39;]
 
         self.topic_base = &#34;menshnet/user/%s&#34;
@@ -216,7 +225,7 @@ class EventSystem(object):
     &#34;&#34;&#34;
     def __init__(self):
         self.messenger = Messenger()
-
+        
     def topic_base(self):
         &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
         if self.messenger.connected.is_set():
@@ -227,6 +236,7 @@ class EventSystem(object):
         Handle a transaction either in synchronous mode (blocking) or async. For async
         response must be a callable object. 
         &#34;&#34;&#34;
+        
         tx = MqttTransaction(self.messenger, topic, data)
 
         # set error handler, default is to just scream at the error log ;)
@@ -238,6 +248,7 @@ class EventSystem(object):
         
         tx.begin()
         if not response_handler:
+            
             tx.wait_for_completion(timeout)
 
         # reply will be none if in async mode (response_handler == None)
@@ -245,7 +256,7 @@ class EventSystem(object):
 
 
 
-    def connect(self, apiKey, **kwArgs):
+    def connect(self, apiKey, user, **kwArgs):
         &#34;&#34;&#34;
         Authenticate apiKey, enable mqtt communications to topics then
         connect to mqtt.        
@@ -256,8 +267,8 @@ class EventSystem(object):
             raise ValueError(&#34;When specified on_connected must be a callable object/function&#34;)
 
         r = requests.post(VALIDATE_API_URL, json={
-            &#34;method&#34;: &#34;validate&#34;,
-            &#34;apiKey&#34;: apiKey
+            &#34;apiKey&#34;: apiKey,
+            &#34;user&#34;: user
         })
         if r.status_code == 403:
             raise PermissionError(apiKey)
@@ -273,7 +284,6 @@ class EventSystem(object):
             raise RuntimeError(&#34;HTTP %d Error while validating apiKey &#39;%s&#39;&#34; % (r.status_code,r.content))
                   
 
-     
      </code></pre>
 </details>
 </section>
@@ -301,7 +311,7 @@ class EventSystem(object):
     &#34;&#34;&#34;
     def __init__(self):
         self.messenger = Messenger()
-
+        
     def topic_base(self):
         &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
         if self.messenger.connected.is_set():
@@ -312,6 +322,7 @@ class EventSystem(object):
         Handle a transaction either in synchronous mode (blocking) or async. For async
         response must be a callable object. 
         &#34;&#34;&#34;
+        
         tx = MqttTransaction(self.messenger, topic, data)
 
         # set error handler, default is to just scream at the error log ;)
@@ -323,6 +334,7 @@ class EventSystem(object):
         
         tx.begin()
         if not response_handler:
+            
             tx.wait_for_completion(timeout)
 
         # reply will be none if in async mode (response_handler == None)
@@ -330,7 +342,7 @@ class EventSystem(object):
 
 
 
-    def connect(self, apiKey, **kwArgs):
+    def connect(self, apiKey, user, **kwArgs):
         &#34;&#34;&#34;
         Authenticate apiKey, enable mqtt communications to topics then
         connect to mqtt.        
@@ -341,8 +353,8 @@ class EventSystem(object):
             raise ValueError(&#34;When specified on_connected must be a callable object/function&#34;)
 
         r = requests.post(VALIDATE_API_URL, json={
-            &#34;method&#34;: &#34;validate&#34;,
-            &#34;apiKey&#34;: apiKey
+            &#34;apiKey&#34;: apiKey,
+            &#34;user&#34;: user
         })
         if r.status_code == 403:
             raise PermissionError(apiKey)
@@ -360,7 +372,7 @@ class EventSystem(object):
 <h3>Methods</h3>
 <dl>
 <dt id="menshnet.evtsys.EventSystem.connect"><code class="name flex">
-<span>def <span class="ident">connect</span></span>(<span>self, apiKey, **kwArgs)</span>
+<span>def <span class="ident">connect</span></span>(<span>self, apiKey, user, **kwArgs)</span>
 </code></dt>
 <dd>
 <section class="desc"><p>Authenticate apiKey, enable mqtt communications to topics then
@@ -369,7 +381,7 @@ connect to mqtt.</p></section>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def connect(self, apiKey, **kwArgs):
+<pre><code class="python">def connect(self, apiKey, user, **kwArgs):
     &#34;&#34;&#34;
     Authenticate apiKey, enable mqtt communications to topics then
     connect to mqtt.        
@@ -380,8 +392,8 @@ connect to mqtt.</p></section>
         raise ValueError(&#34;When specified on_connected must be a callable object/function&#34;)
 
     r = requests.post(VALIDATE_API_URL, json={
-        &#34;method&#34;: &#34;validate&#34;,
-        &#34;apiKey&#34;: apiKey
+        &#34;apiKey&#34;: apiKey,
+        &#34;user&#34;: user
     })
     if r.status_code == 403:
         raise PermissionError(apiKey)
@@ -427,6 +439,7 @@ response must be a callable object.</p></section>
     Handle a transaction either in synchronous mode (blocking) or async. For async
     response must be a callable object. 
     &#34;&#34;&#34;
+    
     tx = MqttTransaction(self.messenger, topic, data)
 
     # set error handler, default is to just scream at the error log ;)
@@ -438,6 +451,7 @@ response must be a callable object.</p></section>
     
     tx.begin()
     if not response_handler:
+        
         tx.wait_for_completion(timeout)
 
     # reply will be none if in async mode (response_handler == None)
@@ -480,6 +494,7 @@ response must be a callable object.</p></section>
         &#34;mqtt confirms our subscribe request, call trigger&#34;
         fobj = self.deferred.get(mid)
         if fobj:
+            Logger.debug(&#34;topic subscribed to, calling deferred function&#34;)
             fobj()
 
 
@@ -490,13 +505,14 @@ response must be a callable object.</p></section>
         
     def connect(self, mqtt_auth, on_connected):
         &#34;connect to mqtt using authentication&#34;
+        Logger.debug(&#34;connecting to mqtt using credentials&#34;)
         self.on_connected = on_connected
         self.mqttc = mqtt.Client(transport=&#34;websockets&#34;)
         self.mqttc.on_connect = self.on_connect
         self.mqttc.on_subscribe = self.on_subscribe 
         self.mqttc.tls_set()
 
-        u = mqtt_auth[&#39;username&#39;]
+        u = mqtt_auth[&#39;name&#39;]
         p = mqtt_auth[&#39;pwhash&#39;]
 
         self.topic_base = &#34;menshnet/user/%s&#34;
@@ -522,13 +538,14 @@ response must be a callable object.</p></section>
 </summary>
 <pre><code class="python">def connect(self, mqtt_auth, on_connected):
     &#34;connect to mqtt using authentication&#34;
+    Logger.debug(&#34;connecting to mqtt using credentials&#34;)
     self.on_connected = on_connected
     self.mqttc = mqtt.Client(transport=&#34;websockets&#34;)
     self.mqttc.on_connect = self.on_connect
     self.mqttc.on_subscribe = self.on_subscribe 
     self.mqttc.tls_set()
 
-    u = mqtt_auth[&#39;username&#39;]
+    u = mqtt_auth[&#39;name&#39;]
     p = mqtt_auth[&#39;pwhash&#39;]
 
     self.topic_base = &#34;menshnet/user/%s&#34;
@@ -573,6 +590,7 @@ response must be a callable object.</p></section>
     &#34;mqtt confirms our subscribe request, call trigger&#34;
     fobj = self.deferred.get(mid)
     if fobj:
+        Logger.debug(&#34;topic subscribed to, calling deferred function&#34;)
         fobj()</code></pre>
 </details>
 </dd>
@@ -642,7 +660,6 @@ response topic
         self.data = data
         self.error = None
         self.complete = threading.Event()
-        self.log = logging.getLogger(&#34;menshnet&#34;)
         self.reply = None
 
     # 
@@ -655,13 +672,14 @@ response topic
         pass
         
     def on_failure(self, error):
-        self.log.error(error)
+        Logger.error(error)
     #############################
     
 
 
     def wait_for_completion(self, timeout):
         &#34;wait for transaction to complete or timeout&#34;
+        Logger.info(&#34;waiting for completion&#34;)
         if self.complete.wait(timeout):
             if self.error:
                 self.on_failure(self.error)
@@ -672,6 +690,7 @@ response topic
 
     def on_error(self, msg):
         &#34;route error to on_failure set complete mutex&#34;
+        Logger.error(&#34;on_error: &#34; + msg)
         self.error = msg         
         self.complete.set()
 
@@ -682,7 +701,7 @@ response topic
 
     def reply_handler(self, client, userdata, msg):
         &#34;route inbound message to on_result&#34;
-        self.log.debug(&#34;received reply from remote service&#34;)
+        Logger.debug(&#34;received reply from remote service&#34;)
         
         self.on_result(msg.payload)
           
@@ -694,7 +713,7 @@ response topic
 
 
     def when_subscribed(self, mid):
-        self.log.debug(&#34;reply topic has subscribed, sending message&#34;)
+        Logger.debug(&#34;reply topic has subscribed, sending message&#34;)
         # route response reply_topic to reply_handler
         self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
 
@@ -708,7 +727,7 @@ response topic
 
     def begin(self):
         &#34;begin transaction&#34;
-        self.log.debug(&#34;Beginning transaction&#34;)
+        Logger.debug(&#34;Beginning transaction&#34;)
         
 
         if not self.messenger.mqttc:
@@ -740,7 +759,7 @@ response topic
 </summary>
 <pre><code class="python">def begin(self):
     &#34;begin transaction&#34;
-    self.log.debug(&#34;Beginning transaction&#34;)
+    Logger.debug(&#34;Beginning transaction&#34;)
     
 
     if not self.messenger.mqttc:
@@ -771,6 +790,7 @@ response topic
 </summary>
 <pre><code class="python">def on_error(self, msg):
     &#34;route error to on_failure set complete mutex&#34;
+    Logger.error(&#34;on_error: &#34; + msg)
     self.error = msg         
     self.complete.set()
 
@@ -790,7 +810,7 @@ response topic
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def on_failure(self, error):
-    self.log.error(error)</code></pre>
+    Logger.error(error)</code></pre>
 </details>
 </dd>
 <dt id="menshnet.evtsys.MqttTransaction.on_result"><code class="name flex">
@@ -830,7 +850,7 @@ response topic
 </summary>
 <pre><code class="python">def reply_handler(self, client, userdata, msg):
     &#34;route inbound message to on_result&#34;
-    self.log.debug(&#34;received reply from remote service&#34;)
+    Logger.debug(&#34;received reply from remote service&#34;)
     
     self.on_result(msg.payload)
       
@@ -852,6 +872,7 @@ response topic
 </summary>
 <pre><code class="python">def wait_for_completion(self, timeout):
     &#34;wait for transaction to complete or timeout&#34;
+    Logger.info(&#34;waiting for completion&#34;)
     if self.complete.wait(timeout):
         if self.error:
             self.on_failure(self.error)
@@ -871,7 +892,7 @@ response topic
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def when_subscribed(self, mid):
-    self.log.debug(&#34;reply topic has subscribed, sending message&#34;)
+    Logger.debug(&#34;reply topic has subscribed, sending message&#34;)
     # route response reply_topic to reply_handler
     self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
 
