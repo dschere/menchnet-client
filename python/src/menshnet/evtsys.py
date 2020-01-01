@@ -10,6 +10,8 @@ import threading
 import uuid
 import logging
 import os
+import sys
+import hashlib
 
 REMOTE_HOST="menshnet.online"
 VALIDATE_API_URL="https://menshnet.online/landing/api/access-mqtt"
@@ -239,10 +241,23 @@ class EventSystem(object):
         if on_connected and not callable(on_connected):
             raise ValueError("When specified on_connected must be a callable object/function")
 
-        r = requests.post(VALIDATE_API_URL, json={
-            "apiKey": apiKey,
-            "user": user
-        })
+        if os.environ.get("MENSHNET_UNITTEST","no") == "yes":
+            class Fake_response:
+                 def __init__(self):
+                     u = os.environ["MENSHNET_UNITTEST_MQTT_USERNAME"].encode('utf-8')
+                     self.content = json.dumps({
+                         "name": hashlib.md5(u).hexdigest(),
+                         "pwhash": os.environ["MENSHNET_UNITTEST_MQTT_PWHASH"]
+                     }).encode('utf-8')
+                     self.status_code = 200
+            r = Fake_response()
+            print("Unit test mode: %s" % str(vars(r)))
+        else:
+            r = requests.post(VALIDATE_API_URL, json={
+                "apiKey": apiKey,
+                "user": user
+            })
+
         if r.status_code == 403:
             raise PermissionError(apiKey)
        
@@ -256,6 +271,28 @@ class EventSystem(object):
         else:
             raise RuntimeError("HTTP %d Error while validating apiKey '%s'" % (r.status_code,r.content))
                   
+
+class UnitTest(object):
+    """
+    Perform unit tests.
+    """
+    def __init__(self):
+        pass
+    def run(self):
+        es = EventSystem()
+        # connect synchronously 
+        es.connect("dummy","unittest")
+        print("connected")
+
+
+if __name__ == '__main__':
+    UnitTest().run()
+
+
+
+
+
+
 
      
 
