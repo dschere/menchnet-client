@@ -80,11 +80,14 @@ def Upload(client, **kwArgs):
         emsg = "'class_name' not defined in kwArgs, must"+ \
                " be the name of the class to instantiate"+ \
                " server side for the sensor"
-        raise ValueError()
+        raise ValueError(emsg)
  
     filename = kwArgs.get('filename')
-    if filename:
-        return _upload_filename(client, filename, class_name, **kwArgs)
+    if not filename:
+        emsg = "'filename' not defined"
+        raise ValueError(emsg)
+
+    return _upload_filename(client, filename, class_name, **kwArgs)
         
 
 
