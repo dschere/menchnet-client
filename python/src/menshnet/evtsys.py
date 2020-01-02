@@ -60,6 +60,7 @@ class MqttTransaction(object):
         Logger.error(error)
     #############################
     
+    
 
 
     def wait_for_completion(self, timeout):
@@ -110,13 +111,37 @@ class MqttTransaction(object):
         self.data['reply_topic'] = self.messenger.topic_base+"/tx-reply/"+str(uuid.uuid4()) 
 
         # subscribe to topic
-        self.messenger.mqttc.subscribe(self.data['reply_topic'])
+        self.messenger.subscribe(self.data['reply_topic'])
+
         self.messenger.mqttc.message_callback_add(self.data['reply_topic'], self.reply_handler)
         # send to remote host
         
         self.messenger.send(self.topic, self.data)
 
+    
+class _SyncSubscribe:
+    def __init__(self):
+        self.pending = {}
         
+
+    def subscribe(self, mqtt_client, topic):
+        if not mqtt_client:
+            raise RuntimeError("no mqtt client, was connect even called?")
+
+        (result,mid) = mqtt_client.subscribe(topic)
+        if result == mqtt.MQTT_ERR_NO_CONN:
+            raise RuntimeError("trying to subscribe to %s but not connected!" % topic) 
+
+        self.pending[mid] = threading.Event() 
+        logging.debug("subscription request for topic=%s mid=%d" % (topic,mid))
+        # wait till on subscribe mid is returned.
+        self.pending[mid].wait()
+
+    def on_subscribe(self, client, userdata, mid, granted_qos):
+        lock = self.pending.get(mid)
+        if lock:
+            logging.debug("subscription for mid=%d confirmed" % mid)
+            lock.set()
 
 class Messenger(object):
     def __init__(self, user):
@@ -128,6 +153,7 @@ class Messenger(object):
         self.connected.clear()     
         self.on_connected = None
         self.mqttc = None
+        self.sync_sub = _SyncSubscribe()
 
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
@@ -137,15 +163,18 @@ class Messenger(object):
             # set connected mutex 
             self.connected.set()
 
+    def subscribe(self, topic):
+        self.sync_sub.subscribe(self.mqttc, topic) 
+
 
     def send(self, topic, data):
         if not self.mqttc:
             raise RuntimeError("connect must be called before using this method")
-        print("mqttc.publish('%s',payload='%s')" % (topic,str(data)))
+        logging.debug("mqttc.publish('%s',payload='%s')" % (topic,str(data)))
         self.mqttc.publish(topic,payload=json.dumps(data))
 
     def on_message(self, client, userdata, msg):
-        print(msg.topic + " -> " + msg.payload.decode() )
+        logging.debug(msg.topic + " -> " + msg.payload.decode() )
         
     def connect(self, mqtt_auth, on_connected):
         "connect to mqtt using authentication"
@@ -154,7 +183,7 @@ class Messenger(object):
         self.mqttc = mqtt.Client(client_id=str(uuid.uuid4()), transport="websockets")
         self.mqttc.on_connect = self.on_connect
         self.mqttc.on_message = self.on_message
-        
+        self.mqttc.on_subscribe = self.sync_sub.on_subscribe
         self.mqttc.tls_set()
         
         u = mqtt_auth['name']
@@ -226,7 +255,7 @@ class EventSystem(object):
                      }).encode('utf-8')
                      self.status_code = 200
             r = Fake_response()
-            print("Unit test mode: %s" % str(vars(r)))
+            logging.debug("Unit test mode: %s" % str(vars(r)))
         else:
             r = requests.post(VALIDATE_API_URL, json={
                 "apiKey": apiKey,
@@ -266,10 +295,11 @@ class UnitTest(object):
             print('fake_tx_server unlock')
             lock.set()
         print("subscribed to %s" % es.messenger.topic_base+"/echo")
-        es.messenger.mqttc.subscribe(es.messenger.topic_base+"/echo")
+        es.messenger.subscribe(es.messenger.topic_base+"/echo")
         es.messenger.mqttc.message_callback_add(es.messenger.topic_base+"/echo",echo_reply) 
         lock.wait() 
         import time
+        # wait for message to be published before exiting
         time.sleep(2)
 
     def fake_tx_client(self, es):
@@ -287,6 +317,7 @@ class UnitTest(object):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(stream=sys.stdout,format="%(message)s",level=logging.DEBUG)
     UnitTest().run()
 
 
