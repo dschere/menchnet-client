@@ -12,13 +12,21 @@ logger = logging.getLogger("menshnet")
 
 from .store import StoredClass
 
-
+def _upload_util(evs, topic, data, _timeout):
+    # block until timeout or response. 
+    reply = evs.transaction(topic, data,  
+            timeout=_timeout
+    )
+    error = reply.get("error")
+    if error:
+        return ( error, None )
+            
+    stored_class = StoredClass(client, sensor_name)
+    return ( None, stored_class )
 
 
 def _upload_filename(client, filename, sensor_name, **kwArgs):
     evs = client.evs
-    
-
     try:
         code = open(filename).read()
     except:
@@ -27,48 +35,29 @@ def _upload_filename(client, filename, sensor_name, **kwArgs):
     topic = evs.topic_base()+"/upload_filename"
     data = {
         "sensor_name": sensor_name,
+        "method": "code",
         "code": code  
     }
-
-    _response_handler = kwArgs.get("on_uploaded")
-    if not callable(_response_handler):
-        raise ValueError("on_uploaded must be a function or a callable object")
     _timeout = kwArgs.get("timeout",15.0)
-
-    _error_handler = kwArgs.get("on_error")
-    if not callable(_error_handler):
-        raise ValueError("on_error must be a function or a callable object")
-
-    def async_handler(data):
-        logger.debug("handle server reply to upload")
-        reply = json.loads(data.decode())
-        if not reply.get('error'):
-            stored_class = StoredClass(client, sensor_name)
-            _response_handler(stored_class)
-        elif _error_handler:
-            _error_handler(reply.get('error')) 
-        
-    if _response_handler:
-        # conduct async transaction
-        evs.transaction(topic, data, 
-            response_handler=async_handler, 
-            timeout=_timeout, 
-            error_handler=_error_handler
-        )
-    else:
-        # synchronous mode, block until timeout or response. 
-        reply = evs.transaction(topic, data,  
-            timeout=_timeout, 
-            error_handler=_error_handler
-        )
-        if _error_handler and reply.get("error"):
-            _error_handler(reply.get('error'))
-            return 
-        stored_class = StoredClass(client, sensor_name)
-        return stored_class
-             
+    return _upload_util(evs, topic, data, _timeout)
+    
+         
 def _upload_git_repo(client, git, sensor_name, **kwArgs):
-    pass
+    evs = client.evs
+    try:
+        code = open(filename).read()
+    except:
+        raise IOError("unable to open "+filename+" for reading")
+
+    topic = evs.topic_base()+"/upload_filename"
+    data = {
+        "sensor_name": sensor_name,
+        "method": "git",
+        "git": git  
+    }
+    _timeout = kwArgs.get("timeout",15.0)
+    return _upload_util(evs, topic, data, _timeout)
+    
 
 def _upload_url(client, url, sensor_name, **kwAargs):
     pass

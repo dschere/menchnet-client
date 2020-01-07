@@ -39,11 +39,11 @@ class Client(object):
         """
         self.evs.connect(apiKey, user, **kwArgs)
         
-    def load(self, name, **kwArgs):
+    def load(self, sensor_name, **kwArgs):
         """
         Load an existing stored class
 
-        name: Unique name for the class previously uploaded
+        sensor_name: Unique name for the class previously uploaded
         kwArgs:
             Optional callback 
                 onLoaded, if load(name, onLoaded=callback) is defined
@@ -56,7 +56,7 @@ class Client(object):
         Upload a stored class to menshnet
 
         upload(sensor_name="MySensor",filename="path-to-code-on-host-machine")
-        upload(sensor_name="MySensor",url="http[s]://..../path-to-file",module_name="")
+        upload(sensor_name="MySensor",url="http[s]://..../path-to-file",module_name="...")
         upload(sensor_name="MySensor",git="git-project-path-to-clone") 
 
 
@@ -110,15 +110,15 @@ class Client(object):
 
         ```    
 
+        
+        # usage:
+        c = menshnet.Client()
+        (error, stored_class) = c.upload( sensor_name="test", filename="path/to/test.py")
 
+        ```
 
-  
+        
 
-        To make this function async as opposed to synchronous add the
-        onUploaded(error="error message"|None) callback, if error == None
-        upload was successful.
-
-        upload(opUploaded=callback, ...)        
         """
         return Upload(self, **kwArgs)
         

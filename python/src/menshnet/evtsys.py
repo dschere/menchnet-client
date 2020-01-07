@@ -14,7 +14,7 @@ import sys
 
 REMOTE_HOST="menshnet.online"
 VALIDATE_API_URL="https://menshnet.online/landing/api/access-mqtt"
-
+SUBSCRIBE_TIMEOUT = 15.0
 
 
 Logger = logging.getLogger("menshnet")
@@ -43,41 +43,23 @@ class MqttTransaction(object):
         self.messenger = messenger
         self.topic = topic
         self.data = data
-        self.error = None
         self.complete = threading.Event()
-        self.reply = None
+        self.reply = {"error": "Internal error"}
 
-    # 
-    # user defined event handlers
-    #
-    def on_result(self, mqtt_msg_payload):
-        self.reply = mqtt_msg_payload
-
-    def on_success(self):
-        pass
-        
-    def on_failure(self, error):
-        Logger.error(error)
-    #############################
-    
-    
+    def _on_result(self, mqtt_msg_payload):
+        self.reply = json.loads(mqtt_msg_payload.decode())
 
 
     def wait_for_completion(self, timeout):
         "wait for transaction to complete or timeout"
         Logger.info("waiting for completion")
-        if self.complete.wait(timeout):
-            if self.error:
-                self.on_failure(self.error)
-            else:
-                self.on_success()
-        else:
-            self.on_failure("timeout")          
+        if not self.complete.wait(timeout):
+            self.on_error("timeout")          
 
     def on_error(self, msg):
         "route error to on_failure set complete mutex"
         Logger.error("on_error: " + msg)
-        self.error = msg         
+        self.reply = {"error": msg}         
         self.complete.set()
 
         # remove if reply topic exists
@@ -89,15 +71,13 @@ class MqttTransaction(object):
         "route inbound message to on_result"
         Logger.debug("received reply from remote service")
         
-        self.on_result(msg.payload)
+        self._on_result(msg.payload)
           
         self.messenger.mqttc.message_callback_remove(self.data['reply_topic'])
         self.messenger.mqttc.unsubscribe(self.data['reply_topic']) 
 
         # unblock and synchronous caller.
         self.complete.set()
-
-
 
     def begin(self):
         "begin transaction"
@@ -111,7 +91,10 @@ class MqttTransaction(object):
         self.data['reply_topic'] = self.messenger.topic_base+"/tx-reply/"+str(uuid.uuid4()) 
 
         # subscribe to topic
-        self.messenger.subscribe(self.data['reply_topic'])
+        timeout = self.messenger.subscribe(self.data['reply_topic'])
+        if timeout:
+            self.on_error("timeout")
+            return
 
         self.messenger.mqttc.message_callback_add(self.data['reply_topic'], self.reply_handler)
         # send to remote host
@@ -123,7 +106,6 @@ class _SyncSubscribe:
     def __init__(self):
         self.pending = {}
         
-
     def subscribe(self, mqtt_client, topic):
         if not mqtt_client:
             raise RuntimeError("no mqtt client, was connect even called?")
@@ -134,8 +116,8 @@ class _SyncSubscribe:
 
         self.pending[mid] = threading.Event() 
         logging.debug("subscription request for topic=%s mid=%d" % (topic,mid))
-        # wait till on subscribe mid is returned.
-        self.pending[mid].wait()
+        # wait until timeout, return true is timeout
+        return not self.pending[mid].wait(SUBSCRIBE_TIMEOUT)
 
     def on_subscribe(self, client, userdata, mid, granted_qos):
         lock = self.pending.get(mid)
@@ -212,25 +194,17 @@ class EventSystem(object):
         if self.messenger.connected.is_set():
             return self.messenger.topic_base
 
-    def transaction(self, topic, data, response_handler=None, timeout=15.0, error_handler=None):
+    def transaction(self, topic, data, timeout=15.0):
         """
         Handle a transaction either in synchronous mode (blocking) or async. For async
         response must be a callable object. 
         """
         tx = MqttTransaction(self.messenger, topic, data)
 
-        # set error handler, default is to just scream at the error log ;)
-        if error_handler:
-            tx.on_failure = error_handler
-        
-        if response_handler:
-            tx.on_response = response_handler
-        
         tx.begin()
-        if not response_handler:
-            tx.wait_for_completion(timeout)
+        tx.wait_for_completion(timeout)
 
-        # reply will be none if in async mode (response_handler == None)
+        # return a dictionary, tx.reply['error'] != None if an error occured.
         return tx.reply 
 
 
