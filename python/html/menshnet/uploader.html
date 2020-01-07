@@ -42,7 +42,7 @@ from .store import StoredClass
 
 
 
-def _upload_filename(client, filename, class_name, **kwArgs):
+def _upload_filename(client, filename, sensor_name, **kwArgs):
     evs = client.evs
     
 
@@ -53,7 +53,7 @@ def _upload_filename(client, filename, class_name, **kwArgs):
 
     topic = evs.topic_base()+&#34;/upload_filename&#34;
     data = {
-        &#34;class_name&#34;: class_name,
+        &#34;sensor_name&#34;: sensor_name,
         &#34;code&#34;: code  
     }
 
@@ -70,7 +70,7 @@ def _upload_filename(client, filename, class_name, **kwArgs):
         logger.debug(&#34;handle server reply to upload&#34;)
         reply = json.loads(data.decode())
         if not reply.get(&#39;error&#39;):
-            stored_class = StoredClass(client, class_name)
+            stored_class = StoredClass(client, sensor_name)
             _response_handler(stored_class)
         elif _error_handler:
             _error_handler(reply.get(&#39;error&#39;)) 
@@ -91,28 +91,38 @@ def _upload_filename(client, filename, class_name, **kwArgs):
         if _error_handler and reply.get(&#34;error&#34;):
             _error_handler(reply.get(&#39;error&#39;))
             return 
-        stored_class = StoredClass(client, class_name)
+        stored_class = StoredClass(client, sensor_name)
         return stored_class
              
+def _upload_git_repo(client, git, sensor_name, **kwArgs):
+    pass
 
-    
+def _upload_url(client, url, sensor_name, **kwAargs):
+    pass
 
 
 def Upload(client, **kwArgs):
     &#34;&#34;&#34;
     Based on kwAargs choose the desired upload method. 
     &#34;&#34;&#34;
-    class_name = kwArgs.get(&#39;class_name&#39;)
-    if not class_name:
-        emsg = &#34;&#39;class_name&#39; not defined in kwArgs, must&#34;+ \
+    sensor_name = kwArgs.get(&#39;sensor_name&#39;)
+    if not sensor_name:
+        emsg = &#34;&#39;sensor_name&#39; not defined in kwArgs, must&#34;+ \
                &#34; be the name of the class to instantiate&#34;+ \
                &#34; server side for the sensor&#34;
-        raise ValueError()
+        raise ValueError(emsg)
  
     filename = kwArgs.get(&#39;filename&#39;)
     if filename:
-        return _upload_filename(client, filename, class_name, **kwArgs)
-        </code></pre>
+        return _upload_filename(client, filename, sensor_name, **kwArgs)
+        
+    git = kwArgs.get(&#39;git&#39;)
+    if git:
+        return _upload_git_repo(client, git, sensor_name, **kwArgs)
+
+    url = kwArgs.get(&#39;url&#39;)
+    if url:
+        return _upload_url(client, git, sensor_name, **kwArgs)</code></pre>
 </details>
 </section>
 <section>
@@ -135,16 +145,24 @@ def Upload(client, **kwArgs):
     &#34;&#34;&#34;
     Based on kwAargs choose the desired upload method. 
     &#34;&#34;&#34;
-    class_name = kwArgs.get(&#39;class_name&#39;)
-    if not class_name:
-        emsg = &#34;&#39;class_name&#39; not defined in kwArgs, must&#34;+ \
+    sensor_name = kwArgs.get(&#39;sensor_name&#39;)
+    if not sensor_name:
+        emsg = &#34;&#39;sensor_name&#39; not defined in kwArgs, must&#34;+ \
                &#34; be the name of the class to instantiate&#34;+ \
                &#34; server side for the sensor&#34;
-        raise ValueError()
+        raise ValueError(emsg)
  
     filename = kwArgs.get(&#39;filename&#39;)
     if filename:
-        return _upload_filename(client, filename, class_name, **kwArgs)</code></pre>
+        return _upload_filename(client, filename, sensor_name, **kwArgs)
+        
+    git = kwArgs.get(&#39;git&#39;)
+    if git:
+        return _upload_git_repo(client, git, sensor_name, **kwArgs)
+
+    url = kwArgs.get(&#39;url&#39;)
+    if url:
+        return _upload_url(client, git, sensor_name, **kwArgs)</code></pre>
 </details>
 </dd>
 </dl>

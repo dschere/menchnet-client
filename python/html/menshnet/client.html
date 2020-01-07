@@ -82,9 +82,64 @@ class Client(object):
         &#34;&#34;&#34;
         Upload a stored class to menshnet
 
-        upload(class_name=&#34;MySensor&#34;,filename=&#34;path-to-code&#34;)
-        upload(class_name=&#34;MySensor&#34;,url=&#34;http[s]://..../path-to-code&#34;)
-        upload(class_name=&#34;MySensor&#34;,git=&#34;git-project-path-to-clone&#34;) 
+        upload(sensor_name=&#34;MySensor&#34;,filename=&#34;path-to-code-on-host-machine&#34;)
+        upload(sensor_name=&#34;MySensor&#34;,url=&#34;http[s]://..../path-to-file&#34;,module_name=&#34;&#34;)
+        upload(sensor_name=&#34;MySensor&#34;,git=&#34;git-project-path-to-clone&#34;) 
+
+
+        sensor_name: User chosen identifier that is used to start/stop
+                     a sensor and acts as a filter for inbound events.
+
+        If filename is specified:
+
+            filename is a python module that will be uploaded to the server
+            for future use. It will be identified on the server by the value of
+            sensor_name. See Note #1 below regarding the requirements for 
+            this module.
+
+        If git is specified:
+
+            git is the path to a git repo that will be cloned server side.
+            
+            module_name is the name of a file within the top level path of the
+            git repo containing the server side code to be executed. See
+            Note #1 below requirments for this module.
+
+        If url is specified:
+
+            url is an http[s] url where to download the user supplied python 
+            sensor module. See Note #1 below regarding the requirements for 
+            this module.
+
+
+
+        Note #1: Sensor module requirements.
+
+        The user supplied sensor module must impliment a register() function.
+        This function must return an instance of an object that is derived off
+        of one of menshnet&#39;s predefined base classes in the server side
+        sensor module. Example:
+
+
+        ```
+        from sensors.vp import VideoProcessor
+
+        class MySensor(VideoProcessor):
+            def onInit(self, api, cfg):
+                &#34;initialization&#34;
+
+            def onImage(self, img):
+                &#34;handle each snapshot of video&#34;
+
+
+        def register():
+            return MySensor()
+
+        ```    
+
+
+
+  
 
         To make this function async as opposed to synchronous add the
         onUploaded(error=&#34;error message&#34;|None) callback, if error == None
@@ -169,9 +224,64 @@ server.</p>
         &#34;&#34;&#34;
         Upload a stored class to menshnet
 
-        upload(class_name=&#34;MySensor&#34;,filename=&#34;path-to-code&#34;)
-        upload(class_name=&#34;MySensor&#34;,url=&#34;http[s]://..../path-to-code&#34;)
-        upload(class_name=&#34;MySensor&#34;,git=&#34;git-project-path-to-clone&#34;) 
+        upload(sensor_name=&#34;MySensor&#34;,filename=&#34;path-to-code-on-host-machine&#34;)
+        upload(sensor_name=&#34;MySensor&#34;,url=&#34;http[s]://..../path-to-file&#34;,module_name=&#34;&#34;)
+        upload(sensor_name=&#34;MySensor&#34;,git=&#34;git-project-path-to-clone&#34;) 
+
+
+        sensor_name: User chosen identifier that is used to start/stop
+                     a sensor and acts as a filter for inbound events.
+
+        If filename is specified:
+
+            filename is a python module that will be uploaded to the server
+            for future use. It will be identified on the server by the value of
+            sensor_name. See Note #1 below regarding the requirements for 
+            this module.
+
+        If git is specified:
+
+            git is the path to a git repo that will be cloned server side.
+            
+            module_name is the name of a file within the top level path of the
+            git repo containing the server side code to be executed. See
+            Note #1 below requirments for this module.
+
+        If url is specified:
+
+            url is an http[s] url where to download the user supplied python 
+            sensor module. See Note #1 below regarding the requirements for 
+            this module.
+
+
+
+        Note #1: Sensor module requirements.
+
+        The user supplied sensor module must impliment a register() function.
+        This function must return an instance of an object that is derived off
+        of one of menshnet&#39;s predefined base classes in the server side
+        sensor module. Example:
+
+
+        ```
+        from sensors.vp import VideoProcessor
+
+        class MySensor(VideoProcessor):
+            def onInit(self, api, cfg):
+                &#34;initialization&#34;
+
+            def onImage(self, img):
+                &#34;handle each snapshot of video&#34;
+
+
+        def register():
+            return MySensor()
+
+        ```    
+
+
+
+  
 
         To make this function async as opposed to synchronous add the
         onUploaded(error=&#34;error message&#34;|None) callback, if error == None
@@ -248,9 +358,48 @@ when complete.</p></section>
 </code></dt>
 <dd>
 <section class="desc"><p>Upload a stored class to menshnet</p>
-<p>upload(class_name="MySensor",filename="path-to-code")
-upload(class_name="MySensor",url="http[s]://..../path-to-code")
-upload(class_name="MySensor",git="git-project-path-to-clone") </p>
+<p>upload(sensor_name="MySensor",filename="path-to-code-on-host-machine")
+upload(sensor_name="MySensor",url="http[s]://..../path-to-file",module_name="")
+upload(sensor_name="MySensor",git="git-project-path-to-clone") </p>
+<p>sensor_name: User chosen identifier that is used to start/stop
+a sensor and acts as a filter for inbound events.</p>
+<p>If filename is specified:</p>
+<pre><code>filename is a python module that will be uploaded to the server
+for future use. It will be identified on the server by the value of
+sensor_name. See Note #1 below regarding the requirements for 
+this module.
+</code></pre>
+<p>If git is specified:</p>
+<pre><code>git is the path to a git repo that will be cloned server side.
+
+module_name is the name of a file within the top level path of the
+git repo containing the server side code to be executed. See
+Note #1 below requirments for this module.
+</code></pre>
+<p>If url is specified:</p>
+<pre><code>url is an http[s] url where to download the user supplied python 
+sensor module. See Note #1 below regarding the requirements for 
+this module.
+</code></pre>
+<p>Note #1: Sensor module requirements.</p>
+<p>The user supplied sensor module must impliment a register() function.
+This function must return an instance of an object that is derived off
+of one of menshnet's predefined base classes in the server side
+sensor module. Example:</p>
+<pre><code>from sensors.vp import VideoProcessor
+
+class MySensor(VideoProcessor):
+    def onInit(self, api, cfg):
+        &quot;initialization&quot;
+
+    def onImage(self, img):
+        &quot;handle each snapshot of video&quot;
+
+
+def register():
+    return MySensor()
+
+</code></pre>
 <p>To make this function async as opposed to synchronous add the
 onUploaded(error="error message"|None) callback, if error == None
 upload was successful.</p>
@@ -263,9 +412,64 @@ upload was successful.</p>
     &#34;&#34;&#34;
     Upload a stored class to menshnet
 
-    upload(class_name=&#34;MySensor&#34;,filename=&#34;path-to-code&#34;)
-    upload(class_name=&#34;MySensor&#34;,url=&#34;http[s]://..../path-to-code&#34;)
-    upload(class_name=&#34;MySensor&#34;,git=&#34;git-project-path-to-clone&#34;) 
+    upload(sensor_name=&#34;MySensor&#34;,filename=&#34;path-to-code-on-host-machine&#34;)
+    upload(sensor_name=&#34;MySensor&#34;,url=&#34;http[s]://..../path-to-file&#34;,module_name=&#34;&#34;)
+    upload(sensor_name=&#34;MySensor&#34;,git=&#34;git-project-path-to-clone&#34;) 
+
+
+    sensor_name: User chosen identifier that is used to start/stop
+                 a sensor and acts as a filter for inbound events.
+
+    If filename is specified:
+
+        filename is a python module that will be uploaded to the server
+        for future use. It will be identified on the server by the value of
+        sensor_name. See Note #1 below regarding the requirements for 
+        this module.
+
+    If git is specified:
+
+        git is the path to a git repo that will be cloned server side.
+        
+        module_name is the name of a file within the top level path of the
+        git repo containing the server side code to be executed. See
+        Note #1 below requirments for this module.
+
+    If url is specified:
+
+        url is an http[s] url where to download the user supplied python 
+        sensor module. See Note #1 below regarding the requirements for 
+        this module.
+
+
+
+    Note #1: Sensor module requirements.
+
+    The user supplied sensor module must impliment a register() function.
+    This function must return an instance of an object that is derived off
+    of one of menshnet&#39;s predefined base classes in the server side
+    sensor module. Example:
+
+
+    ```
+    from sensors.vp import VideoProcessor
+
+    class MySensor(VideoProcessor):
+        def onInit(self, api, cfg):
+            &#34;initialization&#34;
+
+        def onImage(self, img):
+            &#34;handle each snapshot of video&#34;
+
+
+    def register():
+        return MySensor()
+
+    ```    
+
+
+
+
 
     To make this function async as opposed to synchronous add the
     onUploaded(error=&#34;error message&#34;|None) callback, if error == None

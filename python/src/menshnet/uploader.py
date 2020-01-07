@@ -15,7 +15,7 @@ from .store import StoredClass
 
 
 
-def _upload_filename(client, filename, class_name, **kwArgs):
+def _upload_filename(client, filename, sensor_name, **kwArgs):
     evs = client.evs
     
 
@@ -26,7 +26,7 @@ def _upload_filename(client, filename, class_name, **kwArgs):
 
     topic = evs.topic_base()+"/upload_filename"
     data = {
-        "class_name": class_name,
+        "sensor_name": sensor_name,
         "code": code  
     }
 
@@ -43,7 +43,7 @@ def _upload_filename(client, filename, class_name, **kwArgs):
         logger.debug("handle server reply to upload")
         reply = json.loads(data.decode())
         if not reply.get('error'):
-            stored_class = StoredClass(client, class_name)
+            stored_class = StoredClass(client, sensor_name)
             _response_handler(stored_class)
         elif _error_handler:
             _error_handler(reply.get('error')) 
@@ -64,30 +64,37 @@ def _upload_filename(client, filename, class_name, **kwArgs):
         if _error_handler and reply.get("error"):
             _error_handler(reply.get('error'))
             return 
-        stored_class = StoredClass(client, class_name)
+        stored_class = StoredClass(client, sensor_name)
         return stored_class
              
+def _upload_git_repo(client, git, sensor_name, **kwArgs):
+    pass
 
-    
+def _upload_url(client, url, sensor_name, **kwAargs):
+    pass
 
 
 def Upload(client, **kwArgs):
     """
     Based on kwAargs choose the desired upload method. 
     """
-    class_name = kwArgs.get('class_name')
-    if not class_name:
-        emsg = "'class_name' not defined in kwArgs, must"+ \
+    sensor_name = kwArgs.get('sensor_name')
+    if not sensor_name:
+        emsg = "'sensor_name' not defined in kwArgs, must"+ \
                " be the name of the class to instantiate"+ \
                " server side for the sensor"
         raise ValueError(emsg)
  
     filename = kwArgs.get('filename')
-    if not filename:
-        emsg = "'filename' not defined"
-        raise ValueError(emsg)
-
-    return _upload_filename(client, filename, class_name, **kwArgs)
+    if filename:
+        return _upload_filename(client, filename, sensor_name, **kwArgs)
         
+    git = kwArgs.get('git')
+    if git:
+        return _upload_git_repo(client, git, sensor_name, **kwArgs)
+
+    url = kwArgs.get('url')
+    if url:
+        return _upload_url(client, git, sensor_name, **kwArgs)
 
 

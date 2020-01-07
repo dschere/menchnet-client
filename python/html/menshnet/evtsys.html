@@ -37,13 +37,11 @@ import threading
 import uuid
 import logging
 import os
+import sys
 
 REMOTE_HOST=&#34;menshnet.online&#34;
 VALIDATE_API_URL=&#34;https://menshnet.online/landing/api/access-mqtt&#34;
 
-if os.environ.get(&#34;MENSHNET_UNITTEST&#34;):
-    REMOTE_HOST=&#34;localhost&#34;
-    VALIDATE_API_URL=&#34;http://localhost:20000/api/access-mqtt&#34;
 
 
 Logger = logging.getLogger(&#34;menshnet&#34;)
@@ -68,6 +66,7 @@ class MqttTransaction(object):
 
     &#34;&#34;&#34;
     def __init__(self, messenger, topic, data):
+        assert type(data) == type({})
         self.messenger = messenger
         self.topic = topic
         self.data = data
@@ -87,6 +86,7 @@ class MqttTransaction(object):
     def on_failure(self, error):
         Logger.error(error)
     #############################
+    
     
 
 
@@ -125,24 +125,11 @@ class MqttTransaction(object):
         self.complete.set()
 
 
-    def when_subscribed(self, mid):
-        Logger.debug(&#34;reply topic has subscribed, sending message&#34;)
-        # route response reply_topic to reply_handler
-        self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
-
-        # send to remote host
-        self.messenger.send(self.topic, self.data)
-
-        # remove deferred reference.
-        if mid in self.messenger.deferred: 
-            del self.messenger.deferred[mid]
-         
 
     def begin(self):
         &#34;begin transaction&#34;
         Logger.debug(&#34;Beginning transaction&#34;)
         
-
         if not self.messenger.mqttc:
             self.on_error(&#34;mqtt not initialized&#34;) 
             return
@@ -151,30 +138,50 @@ class MqttTransaction(object):
         self.data[&#39;reply_topic&#39;] = self.messenger.topic_base+&#34;/tx-reply/&#34;+str(uuid.uuid4()) 
 
         # subscribe to topic
-        (sub_result, mid) = self.messenger.mqttc.subscribe(self.data[&#39;reply_topic&#39;])
-        if sub_result == mqtt.MQTT_ERR_NO_CONN:
-            self.on_error(&#34;unable to subscribe no connection&#34;)
-            return
+        self.messenger.subscribe(self.data[&#39;reply_topic&#39;])
 
-        # defer transaction until subscribed event from mqtt
-        self.messenger.deferred[mid] = lambda *args: self.when_subscribed(mid)
+        self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
+        # send to remote host
+        
+        self.messenger.send(self.topic, self.data)
 
+    
+class _SyncSubscribe:
+    def __init__(self):
+        self.pending = {}
         
 
+    def subscribe(self, mqtt_client, topic):
+        if not mqtt_client:
+            raise RuntimeError(&#34;no mqtt client, was connect even called?&#34;)
+
+        (result,mid) = mqtt_client.subscribe(topic)
+        if result == mqtt.MQTT_ERR_NO_CONN:
+            raise RuntimeError(&#34;trying to subscribe to %s but not connected!&#34; % topic) 
+
+        self.pending[mid] = threading.Event() 
+        logging.debug(&#34;subscription request for topic=%s mid=%d&#34; % (topic,mid))
+        # wait till on subscribe mid is returned.
+        self.pending[mid].wait()
+
+    def on_subscribe(self, client, userdata, mid, granted_qos):
+        lock = self.pending.get(mid)
+        if lock:
+            logging.debug(&#34;subscription for mid=%d confirmed&#34; % mid)
+            lock.set()
 
 class Messenger(object):
-    def __init__(self):
-        self.inbound_msgq = queue.Queue()
+    def __init__(self, user):
+        self.user = user
+        self.topic_base = &#34;menshnet/client/%s&#34; % self.user
         # create a semaphore to block until mqtt connection,
         # the mqtt client will auto reconnect until success.
         self.connected = threading.Event()
         self.connected.clear()     
         self.on_connected = None
         self.mqttc = None
-        # functions to be called when subscribed.
-        self.deferred = {}
-        
-    
+        self.sync_sub = _SyncSubscribe()
+
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             # if provided call user handler when mqtt has connected.
@@ -182,33 +189,34 @@ class Messenger(object):
                 self.on_connected()
             # set connected mutex 
             self.connected.set()
-       
-    def on_subscribe(self, client, userdata, mid, granted_qos):
-        &#34;mqtt confirms our subscribe request, call trigger&#34;
-        fobj = self.deferred.get(mid)
-        if fobj:
-            Logger.debug(&#34;topic subscribed to, calling deferred function&#34;)
-            fobj()
+
+    def subscribe(self, topic):
+        self.sync_sub.subscribe(self.mqttc, topic) 
 
 
     def send(self, topic, data):
         if not self.mqttc:
             raise RuntimeError(&#34;connect must be called before using this method&#34;)
+        logging.debug(&#34;mqttc.publish(&#39;%s&#39;,payload=&#39;%s&#39;)&#34; % (topic,str(data)))
         self.mqttc.publish(topic,payload=json.dumps(data))
+
+    def on_message(self, client, userdata, msg):
+        logging.debug(msg.topic + &#34; -&gt; &#34; + msg.payload.decode() )
         
     def connect(self, mqtt_auth, on_connected):
         &#34;connect to mqtt using authentication&#34;
         Logger.debug(&#34;connecting to mqtt using credentials&#34;)
         self.on_connected = on_connected
-        self.mqttc = mqtt.Client(transport=&#34;websockets&#34;)
+        self.mqttc = mqtt.Client(client_id=str(uuid.uuid4()), transport=&#34;websockets&#34;)
         self.mqttc.on_connect = self.on_connect
-        self.mqttc.on_subscribe = self.on_subscribe 
+        self.mqttc.on_message = self.on_message
+        self.mqttc.on_subscribe = self.sync_sub.on_subscribe
         self.mqttc.tls_set()
-
+        
         u = mqtt_auth[&#39;name&#39;]
         p = mqtt_auth[&#39;pwhash&#39;]
 
-        self.topic_base = &#34;menshnet/user/%s&#34;
+        
 
         self.mqttc.username_pw_set(u, p)
         self.mqttc.ws_set_options()
@@ -224,7 +232,7 @@ class EventSystem(object):
     Wrapper aroung MQTT for messaging.
     &#34;&#34;&#34;
     def __init__(self):
-        self.messenger = Messenger()
+        self.messenger = None
         
     def topic_base(self):
         &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
@@ -236,7 +244,6 @@ class EventSystem(object):
         Handle a transaction either in synchronous mode (blocking) or async. For async
         response must be a callable object. 
         &#34;&#34;&#34;
-        
         tx = MqttTransaction(self.messenger, topic, data)
 
         # set error handler, default is to just scream at the error log ;)
@@ -248,7 +255,6 @@ class EventSystem(object):
         
         tx.begin()
         if not response_handler:
-            
             tx.wait_for_completion(timeout)
 
         # reply will be none if in async mode (response_handler == None)
@@ -261,15 +267,28 @@ class EventSystem(object):
         Authenticate apiKey, enable mqtt communications to topics then
         connect to mqtt.        
         &#34;&#34;&#34;
+        self.messenger = Messenger(user)
 
         on_connected = kwArgs.get(&#39;on_connected&#39;)
         if on_connected and not callable(on_connected):
             raise ValueError(&#34;When specified on_connected must be a callable object/function&#34;)
 
-        r = requests.post(VALIDATE_API_URL, json={
-            &#34;apiKey&#34;: apiKey,
-            &#34;user&#34;: user
-        })
+        if os.environ.get(&#34;MENSHNET_UNITTEST&#34;,&#34;no&#34;) == &#34;yes&#34;:
+            class Fake_response:
+                 def __init__(self):
+                     self.content = json.dumps({
+                         &#34;name&#34;: os.environ[&#34;MENSHNET_UNITTEST_MQTT_USERNAME&#34;],
+                         &#34;pwhash&#34;: os.environ[&#34;MENSHNET_UNITTEST_MQTT_PWHASH&#34;]
+                     }).encode(&#39;utf-8&#39;)
+                     self.status_code = 200
+            r = Fake_response()
+            logging.debug(&#34;Unit test mode: %s&#34; % str(vars(r)))
+        else:
+            r = requests.post(VALIDATE_API_URL, json={
+                &#34;apiKey&#34;: apiKey,
+                &#34;user&#34;: user
+            })
+
         if r.status_code == 403:
             raise PermissionError(apiKey)
        
@@ -283,6 +302,56 @@ class EventSystem(object):
         else:
             raise RuntimeError(&#34;HTTP %d Error while validating apiKey &#39;%s&#39;&#34; % (r.status_code,r.content))
                   
+
+class UnitTest(object):
+    &#34;&#34;&#34;
+    Perform unit tests.
+    &#34;&#34;&#34;
+    def __init__(self):
+        pass
+
+    def fake_tx_server(self, es):
+        print(&#34;fake_tx_server&#34;)
+        lock = threading.Event()
+        def echo_reply(client, userdata, message):
+            print(&#34;received message&#34;)
+            data = message.payload.decode()
+            m = json.loads(data)
+            print(&#34;publish reply to %s&#34; % m[&#39;reply_topic&#39;])
+            client.publish(m[&#39;reply_topic&#39;],payload=json.dumps(m))
+            print(&#39;fake_tx_server unlock&#39;)
+            lock.set()
+        print(&#34;subscribed to %s&#34; % es.messenger.topic_base+&#34;/echo&#34;)
+        es.messenger.subscribe(es.messenger.topic_base+&#34;/echo&#34;)
+        es.messenger.mqttc.message_callback_add(es.messenger.topic_base+&#34;/echo&#34;,echo_reply) 
+        lock.wait() 
+        import time
+        # wait for message to be published before exiting
+        time.sleep(2)
+
+    def fake_tx_client(self, es):
+        r = es.transaction( es.messenger.topic_base+&#34;/echo&#34;, {&#39;hello&#39;:&#39;world&#39;})
+        print(&#34;response &#34; + str(r))
+
+    def run(self):
+        es = EventSystem()
+        # connect synchronously 
+        es.connect(&#34;dummy&#34;,os.environ[&#34;MENSHNET_UNITTEST_MQTT_USERNAME&#34;])
+        print(&#34;connected&#34;)
+        cmd = sys.argv[1]
+        method = getattr(self,cmd)
+        method(es)        
+
+
+if __name__ == &#39;__main__&#39;:
+    logging.basicConfig(stream=sys.stdout,format=&#34;%(message)s&#34;,level=logging.DEBUG)
+    UnitTest().run()
+
+
+
+
+
+
 
      </code></pre>
 </details>
@@ -310,7 +379,7 @@ class EventSystem(object):
     Wrapper aroung MQTT for messaging.
     &#34;&#34;&#34;
     def __init__(self):
-        self.messenger = Messenger()
+        self.messenger = None
         
     def topic_base(self):
         &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
@@ -322,7 +391,6 @@ class EventSystem(object):
         Handle a transaction either in synchronous mode (blocking) or async. For async
         response must be a callable object. 
         &#34;&#34;&#34;
-        
         tx = MqttTransaction(self.messenger, topic, data)
 
         # set error handler, default is to just scream at the error log ;)
@@ -334,7 +402,6 @@ class EventSystem(object):
         
         tx.begin()
         if not response_handler:
-            
             tx.wait_for_completion(timeout)
 
         # reply will be none if in async mode (response_handler == None)
@@ -347,15 +414,28 @@ class EventSystem(object):
         Authenticate apiKey, enable mqtt communications to topics then
         connect to mqtt.        
         &#34;&#34;&#34;
+        self.messenger = Messenger(user)
 
         on_connected = kwArgs.get(&#39;on_connected&#39;)
         if on_connected and not callable(on_connected):
             raise ValueError(&#34;When specified on_connected must be a callable object/function&#34;)
 
-        r = requests.post(VALIDATE_API_URL, json={
-            &#34;apiKey&#34;: apiKey,
-            &#34;user&#34;: user
-        })
+        if os.environ.get(&#34;MENSHNET_UNITTEST&#34;,&#34;no&#34;) == &#34;yes&#34;:
+            class Fake_response:
+                 def __init__(self):
+                     self.content = json.dumps({
+                         &#34;name&#34;: os.environ[&#34;MENSHNET_UNITTEST_MQTT_USERNAME&#34;],
+                         &#34;pwhash&#34;: os.environ[&#34;MENSHNET_UNITTEST_MQTT_PWHASH&#34;]
+                     }).encode(&#39;utf-8&#39;)
+                     self.status_code = 200
+            r = Fake_response()
+            logging.debug(&#34;Unit test mode: %s&#34; % str(vars(r)))
+        else:
+            r = requests.post(VALIDATE_API_URL, json={
+                &#34;apiKey&#34;: apiKey,
+                &#34;user&#34;: user
+            })
+
         if r.status_code == 403:
             raise PermissionError(apiKey)
        
@@ -386,15 +466,28 @@ connect to mqtt.</p></section>
     Authenticate apiKey, enable mqtt communications to topics then
     connect to mqtt.        
     &#34;&#34;&#34;
+    self.messenger = Messenger(user)
 
     on_connected = kwArgs.get(&#39;on_connected&#39;)
     if on_connected and not callable(on_connected):
         raise ValueError(&#34;When specified on_connected must be a callable object/function&#34;)
 
-    r = requests.post(VALIDATE_API_URL, json={
-        &#34;apiKey&#34;: apiKey,
-        &#34;user&#34;: user
-    })
+    if os.environ.get(&#34;MENSHNET_UNITTEST&#34;,&#34;no&#34;) == &#34;yes&#34;:
+        class Fake_response:
+             def __init__(self):
+                 self.content = json.dumps({
+                     &#34;name&#34;: os.environ[&#34;MENSHNET_UNITTEST_MQTT_USERNAME&#34;],
+                     &#34;pwhash&#34;: os.environ[&#34;MENSHNET_UNITTEST_MQTT_PWHASH&#34;]
+                 }).encode(&#39;utf-8&#39;)
+                 self.status_code = 200
+        r = Fake_response()
+        logging.debug(&#34;Unit test mode: %s&#34; % str(vars(r)))
+    else:
+        r = requests.post(VALIDATE_API_URL, json={
+            &#34;apiKey&#34;: apiKey,
+            &#34;user&#34;: user
+        })
+
     if r.status_code == 403:
         raise PermissionError(apiKey)
    
@@ -439,7 +532,6 @@ response must be a callable object.</p></section>
     Handle a transaction either in synchronous mode (blocking) or async. For async
     response must be a callable object. 
     &#34;&#34;&#34;
-    
     tx = MqttTransaction(self.messenger, topic, data)
 
     # set error handler, default is to just scream at the error log ;)
@@ -451,7 +543,6 @@ response must be a callable object.</p></section>
     
     tx.begin()
     if not response_handler:
-        
         tx.wait_for_completion(timeout)
 
     # reply will be none if in async mode (response_handler == None)
@@ -462,6 +553,7 @@ response must be a callable object.</p></section>
 </dd>
 <dt id="menshnet.evtsys.Messenger"><code class="flex name class">
 <span>class <span class="ident">Messenger</span></span>
+<span>(</span><span>user)</span>
 </code></dt>
 <dd>
 <section class="desc"></section>
@@ -470,18 +562,17 @@ response must be a callable object.</p></section>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">class Messenger(object):
-    def __init__(self):
-        self.inbound_msgq = queue.Queue()
+    def __init__(self, user):
+        self.user = user
+        self.topic_base = &#34;menshnet/client/%s&#34; % self.user
         # create a semaphore to block until mqtt connection,
         # the mqtt client will auto reconnect until success.
         self.connected = threading.Event()
         self.connected.clear()     
         self.on_connected = None
         self.mqttc = None
-        # functions to be called when subscribed.
-        self.deferred = {}
-        
-    
+        self.sync_sub = _SyncSubscribe()
+
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
             # if provided call user handler when mqtt has connected.
@@ -489,33 +580,34 @@ response must be a callable object.</p></section>
                 self.on_connected()
             # set connected mutex 
             self.connected.set()
-       
-    def on_subscribe(self, client, userdata, mid, granted_qos):
-        &#34;mqtt confirms our subscribe request, call trigger&#34;
-        fobj = self.deferred.get(mid)
-        if fobj:
-            Logger.debug(&#34;topic subscribed to, calling deferred function&#34;)
-            fobj()
+
+    def subscribe(self, topic):
+        self.sync_sub.subscribe(self.mqttc, topic) 
 
 
     def send(self, topic, data):
         if not self.mqttc:
             raise RuntimeError(&#34;connect must be called before using this method&#34;)
+        logging.debug(&#34;mqttc.publish(&#39;%s&#39;,payload=&#39;%s&#39;)&#34; % (topic,str(data)))
         self.mqttc.publish(topic,payload=json.dumps(data))
+
+    def on_message(self, client, userdata, msg):
+        logging.debug(msg.topic + &#34; -&gt; &#34; + msg.payload.decode() )
         
     def connect(self, mqtt_auth, on_connected):
         &#34;connect to mqtt using authentication&#34;
         Logger.debug(&#34;connecting to mqtt using credentials&#34;)
         self.on_connected = on_connected
-        self.mqttc = mqtt.Client(transport=&#34;websockets&#34;)
+        self.mqttc = mqtt.Client(client_id=str(uuid.uuid4()), transport=&#34;websockets&#34;)
         self.mqttc.on_connect = self.on_connect
-        self.mqttc.on_subscribe = self.on_subscribe 
+        self.mqttc.on_message = self.on_message
+        self.mqttc.on_subscribe = self.sync_sub.on_subscribe
         self.mqttc.tls_set()
-
+        
         u = mqtt_auth[&#39;name&#39;]
         p = mqtt_auth[&#39;pwhash&#39;]
 
-        self.topic_base = &#34;menshnet/user/%s&#34;
+        
 
         self.mqttc.username_pw_set(u, p)
         self.mqttc.ws_set_options()
@@ -540,15 +632,16 @@ response must be a callable object.</p></section>
     &#34;connect to mqtt using authentication&#34;
     Logger.debug(&#34;connecting to mqtt using credentials&#34;)
     self.on_connected = on_connected
-    self.mqttc = mqtt.Client(transport=&#34;websockets&#34;)
+    self.mqttc = mqtt.Client(client_id=str(uuid.uuid4()), transport=&#34;websockets&#34;)
     self.mqttc.on_connect = self.on_connect
-    self.mqttc.on_subscribe = self.on_subscribe 
+    self.mqttc.on_message = self.on_message
+    self.mqttc.on_subscribe = self.sync_sub.on_subscribe
     self.mqttc.tls_set()
-
+    
     u = mqtt_auth[&#39;name&#39;]
     p = mqtt_auth[&#39;pwhash&#39;]
 
-    self.topic_base = &#34;menshnet/user/%s&#34;
+    
 
     self.mqttc.username_pw_set(u, p)
     self.mqttc.ws_set_options()
@@ -577,21 +670,17 @@ response must be a callable object.</p></section>
         self.connected.set()</code></pre>
 </details>
 </dd>
-<dt id="menshnet.evtsys.Messenger.on_subscribe"><code class="name flex">
-<span>def <span class="ident">on_subscribe</span></span>(<span>self, client, userdata, mid, granted_qos)</span>
+<dt id="menshnet.evtsys.Messenger.on_message"><code class="name flex">
+<span>def <span class="ident">on_message</span></span>(<span>self, client, userdata, msg)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>mqtt confirms our subscribe request, call trigger</p></section>
+<section class="desc"></section>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def on_subscribe(self, client, userdata, mid, granted_qos):
-    &#34;mqtt confirms our subscribe request, call trigger&#34;
-    fobj = self.deferred.get(mid)
-    if fobj:
-        Logger.debug(&#34;topic subscribed to, calling deferred function&#34;)
-        fobj()</code></pre>
+<pre><code class="python">def on_message(self, client, userdata, msg):
+    logging.debug(msg.topic + &#34; -&gt; &#34; + msg.payload.decode() )</code></pre>
 </details>
 </dd>
 <dt id="menshnet.evtsys.Messenger.send"><code class="name flex">
@@ -606,7 +695,21 @@ response must be a callable object.</p></section>
 <pre><code class="python">def send(self, topic, data):
     if not self.mqttc:
         raise RuntimeError(&#34;connect must be called before using this method&#34;)
+    logging.debug(&#34;mqttc.publish(&#39;%s&#39;,payload=&#39;%s&#39;)&#34; % (topic,str(data)))
     self.mqttc.publish(topic,payload=json.dumps(data))</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.Messenger.subscribe"><code class="name flex">
+<span>def <span class="ident">subscribe</span></span>(<span>self, topic)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def subscribe(self, topic):
+    self.sync_sub.subscribe(self.mqttc, topic) </code></pre>
 </details>
 </dd>
 </dl>
@@ -655,6 +758,7 @@ response topic
 
     &#34;&#34;&#34;
     def __init__(self, messenger, topic, data):
+        assert type(data) == type({})
         self.messenger = messenger
         self.topic = topic
         self.data = data
@@ -674,6 +778,7 @@ response topic
     def on_failure(self, error):
         Logger.error(error)
     #############################
+    
     
 
 
@@ -712,24 +817,11 @@ response topic
         self.complete.set()
 
 
-    def when_subscribed(self, mid):
-        Logger.debug(&#34;reply topic has subscribed, sending message&#34;)
-        # route response reply_topic to reply_handler
-        self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
-
-        # send to remote host
-        self.messenger.send(self.topic, self.data)
-
-        # remove deferred reference.
-        if mid in self.messenger.deferred: 
-            del self.messenger.deferred[mid]
-         
 
     def begin(self):
         &#34;begin transaction&#34;
         Logger.debug(&#34;Beginning transaction&#34;)
         
-
         if not self.messenger.mqttc:
             self.on_error(&#34;mqtt not initialized&#34;) 
             return
@@ -738,13 +830,12 @@ response topic
         self.data[&#39;reply_topic&#39;] = self.messenger.topic_base+&#34;/tx-reply/&#34;+str(uuid.uuid4()) 
 
         # subscribe to topic
-        (sub_result, mid) = self.messenger.mqttc.subscribe(self.data[&#39;reply_topic&#39;])
-        if sub_result == mqtt.MQTT_ERR_NO_CONN:
-            self.on_error(&#34;unable to subscribe no connection&#34;)
-            return
+        self.messenger.subscribe(self.data[&#39;reply_topic&#39;])
 
-        # defer transaction until subscribed event from mqtt
-        self.messenger.deferred[mid] = lambda *args: self.when_subscribed(mid)</code></pre>
+        self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
+        # send to remote host
+        
+        self.messenger.send(self.topic, self.data)</code></pre>
 </details>
 <h3>Methods</h3>
 <dl>
@@ -761,7 +852,6 @@ response topic
     &#34;begin transaction&#34;
     Logger.debug(&#34;Beginning transaction&#34;)
     
-
     if not self.messenger.mqttc:
         self.on_error(&#34;mqtt not initialized&#34;) 
         return
@@ -770,13 +860,12 @@ response topic
     self.data[&#39;reply_topic&#39;] = self.messenger.topic_base+&#34;/tx-reply/&#34;+str(uuid.uuid4()) 
 
     # subscribe to topic
-    (sub_result, mid) = self.messenger.mqttc.subscribe(self.data[&#39;reply_topic&#39;])
-    if sub_result == mqtt.MQTT_ERR_NO_CONN:
-        self.on_error(&#34;unable to subscribe no connection&#34;)
-        return
+    self.messenger.subscribe(self.data[&#39;reply_topic&#39;])
 
-    # defer transaction until subscribed event from mqtt
-    self.messenger.deferred[mid] = lambda *args: self.when_subscribed(mid)</code></pre>
+    self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
+    # send to remote host
+    
+    self.messenger.send(self.topic, self.data)</code></pre>
 </details>
 </dd>
 <dt id="menshnet.evtsys.MqttTransaction.on_error"><code class="name flex">
@@ -882,8 +971,60 @@ response topic
         self.on_failure(&#34;timeout&#34;)          </code></pre>
 </details>
 </dd>
-<dt id="menshnet.evtsys.MqttTransaction.when_subscribed"><code class="name flex">
-<span>def <span class="ident">when_subscribed</span></span>(<span>self, mid)</span>
+</dl>
+</dd>
+<dt id="menshnet.evtsys.UnitTest"><code class="flex name class">
+<span>class <span class="ident">UnitTest</span></span>
+</code></dt>
+<dd>
+<section class="desc"><p>Perform unit tests.</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class UnitTest(object):
+    &#34;&#34;&#34;
+    Perform unit tests.
+    &#34;&#34;&#34;
+    def __init__(self):
+        pass
+
+    def fake_tx_server(self, es):
+        print(&#34;fake_tx_server&#34;)
+        lock = threading.Event()
+        def echo_reply(client, userdata, message):
+            print(&#34;received message&#34;)
+            data = message.payload.decode()
+            m = json.loads(data)
+            print(&#34;publish reply to %s&#34; % m[&#39;reply_topic&#39;])
+            client.publish(m[&#39;reply_topic&#39;],payload=json.dumps(m))
+            print(&#39;fake_tx_server unlock&#39;)
+            lock.set()
+        print(&#34;subscribed to %s&#34; % es.messenger.topic_base+&#34;/echo&#34;)
+        es.messenger.subscribe(es.messenger.topic_base+&#34;/echo&#34;)
+        es.messenger.mqttc.message_callback_add(es.messenger.topic_base+&#34;/echo&#34;,echo_reply) 
+        lock.wait() 
+        import time
+        # wait for message to be published before exiting
+        time.sleep(2)
+
+    def fake_tx_client(self, es):
+        r = es.transaction( es.messenger.topic_base+&#34;/echo&#34;, {&#39;hello&#39;:&#39;world&#39;})
+        print(&#34;response &#34; + str(r))
+
+    def run(self):
+        es = EventSystem()
+        # connect synchronously 
+        es.connect(&#34;dummy&#34;,os.environ[&#34;MENSHNET_UNITTEST_MQTT_USERNAME&#34;])
+        print(&#34;connected&#34;)
+        cmd = sys.argv[1]
+        method = getattr(self,cmd)
+        method(es)        </code></pre>
+</details>
+<h3>Methods</h3>
+<dl>
+<dt id="menshnet.evtsys.UnitTest.fake_tx_client"><code class="name flex">
+<span>def <span class="ident">fake_tx_client</span></span>(<span>self, es)</span>
 </code></dt>
 <dd>
 <section class="desc"></section>
@@ -891,17 +1032,57 @@ response topic
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def when_subscribed(self, mid):
-    Logger.debug(&#34;reply topic has subscribed, sending message&#34;)
-    # route response reply_topic to reply_handler
-    self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
-
-    # send to remote host
-    self.messenger.send(self.topic, self.data)
-
-    # remove deferred reference.
-    if mid in self.messenger.deferred: 
-        del self.messenger.deferred[mid]</code></pre>
+<pre><code class="python">def fake_tx_client(self, es):
+    r = es.transaction( es.messenger.topic_base+&#34;/echo&#34;, {&#39;hello&#39;:&#39;world&#39;})
+    print(&#34;response &#34; + str(r))</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.UnitTest.fake_tx_server"><code class="name flex">
+<span>def <span class="ident">fake_tx_server</span></span>(<span>self, es)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def fake_tx_server(self, es):
+    print(&#34;fake_tx_server&#34;)
+    lock = threading.Event()
+    def echo_reply(client, userdata, message):
+        print(&#34;received message&#34;)
+        data = message.payload.decode()
+        m = json.loads(data)
+        print(&#34;publish reply to %s&#34; % m[&#39;reply_topic&#39;])
+        client.publish(m[&#39;reply_topic&#39;],payload=json.dumps(m))
+        print(&#39;fake_tx_server unlock&#39;)
+        lock.set()
+    print(&#34;subscribed to %s&#34; % es.messenger.topic_base+&#34;/echo&#34;)
+    es.messenger.subscribe(es.messenger.topic_base+&#34;/echo&#34;)
+    es.messenger.mqttc.message_callback_add(es.messenger.topic_base+&#34;/echo&#34;,echo_reply) 
+    lock.wait() 
+    import time
+    # wait for message to be published before exiting
+    time.sleep(2)</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.UnitTest.run"><code class="name flex">
+<span>def <span class="ident">run</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def run(self):
+    es = EventSystem()
+    # connect synchronously 
+    es.connect(&#34;dummy&#34;,os.environ[&#34;MENSHNET_UNITTEST_MQTT_USERNAME&#34;])
+    print(&#34;connected&#34;)
+    cmd = sys.argv[1]
+    method = getattr(self,cmd)
+    method(es)        </code></pre>
 </details>
 </dd>
 </dl>
@@ -935,8 +1116,9 @@ response topic
 <ul class="">
 <li><code><a title="menshnet.evtsys.Messenger.connect" href="#menshnet.evtsys.Messenger.connect">connect</a></code></li>
 <li><code><a title="menshnet.evtsys.Messenger.on_connect" href="#menshnet.evtsys.Messenger.on_connect">on_connect</a></code></li>
-<li><code><a title="menshnet.evtsys.Messenger.on_subscribe" href="#menshnet.evtsys.Messenger.on_subscribe">on_subscribe</a></code></li>
+<li><code><a title="menshnet.evtsys.Messenger.on_message" href="#menshnet.evtsys.Messenger.on_message">on_message</a></code></li>
 <li><code><a title="menshnet.evtsys.Messenger.send" href="#menshnet.evtsys.Messenger.send">send</a></code></li>
+<li><code><a title="menshnet.evtsys.Messenger.subscribe" href="#menshnet.evtsys.Messenger.subscribe">subscribe</a></code></li>
 </ul>
 </li>
 <li>
@@ -949,7 +1131,14 @@ response topic
 <li><code><a title="menshnet.evtsys.MqttTransaction.on_success" href="#menshnet.evtsys.MqttTransaction.on_success">on_success</a></code></li>
 <li><code><a title="menshnet.evtsys.MqttTransaction.reply_handler" href="#menshnet.evtsys.MqttTransaction.reply_handler">reply_handler</a></code></li>
 <li><code><a title="menshnet.evtsys.MqttTransaction.wait_for_completion" href="#menshnet.evtsys.MqttTransaction.wait_for_completion">wait_for_completion</a></code></li>
-<li><code><a title="menshnet.evtsys.MqttTransaction.when_subscribed" href="#menshnet.evtsys.MqttTransaction.when_subscribed">when_subscribed</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="menshnet.evtsys.UnitTest" href="#menshnet.evtsys.UnitTest">UnitTest</a></code></h4>
+<ul class="">
+<li><code><a title="menshnet.evtsys.UnitTest.fake_tx_client" href="#menshnet.evtsys.UnitTest.fake_tx_client">fake_tx_client</a></code></li>
+<li><code><a title="menshnet.evtsys.UnitTest.fake_tx_server" href="#menshnet.evtsys.UnitTest.fake_tx_server">fake_tx_server</a></code></li>
+<li><code><a title="menshnet.evtsys.UnitTest.run" href="#menshnet.evtsys.UnitTest.run">run</a></code></li>
 </ul>
 </li>
 </ul>

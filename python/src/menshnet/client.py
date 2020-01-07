@@ -55,9 +55,64 @@ class Client(object):
         """
         Upload a stored class to menshnet
 
-        upload(class_name="MySensor",filename="path-to-code")
-        upload(class_name="MySensor",url="http[s]://..../path-to-code")
-        upload(class_name="MySensor",git="git-project-path-to-clone") 
+        upload(sensor_name="MySensor",filename="path-to-code-on-host-machine")
+        upload(sensor_name="MySensor",url="http[s]://..../path-to-file",module_name="")
+        upload(sensor_name="MySensor",git="git-project-path-to-clone") 
+
+
+        sensor_name: User chosen identifier that is used to start/stop
+                     a sensor and acts as a filter for inbound events.
+
+        If filename is specified:
+
+            filename is a python module that will be uploaded to the server
+            for future use. It will be identified on the server by the value of
+            sensor_name. See Note #1 below regarding the requirements for 
+            this module.
+
+        If git is specified:
+
+            git is the path to a git repo that will be cloned server side.
+            
+            module_name is the name of a file within the top level path of the
+            git repo containing the server side code to be executed. See
+            Note #1 below requirments for this module.
+
+        If url is specified:
+
+            url is an http[s] url where to download the user supplied python 
+            sensor module. See Note #1 below regarding the requirements for 
+            this module.
+
+
+
+        Note #1: Sensor module requirements.
+
+        The user supplied sensor module must impliment a register() function.
+        This function must return an instance of an object that is derived off
+        of one of menshnet's predefined base classes in the server side
+        sensor module. Example:
+
+
+        ```
+        from sensors.vp import VideoProcessor
+
+        class MySensor(VideoProcessor):
+            def onInit(self, api, cfg):
+                "initialization"
+
+            def onImage(self, img):
+                "handle each snapshot of video"
+
+
+        def register():
+            return MySensor()
+
+        ```    
+
+
+
+  
 
         To make this function async as opposed to synchronous add the
         onUploaded(error="error message"|None) callback, if error == None
