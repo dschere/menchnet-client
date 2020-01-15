@@ -4,9 +4,7 @@ Menshnet client module
 """
 
 
-from .store import StoredClass
 from .evtsys import EventSystem    
-from .uploader import Upload 
 
 import logging
 

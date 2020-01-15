@@ -29,21 +29,24 @@
 Networking module for library, this leverages mqtt and requests
 &#34;&#34;&#34;
 
-import paho.mqtt.client as mqtt
 import queue
 import requests
 import json
 import threading
 import uuid
-import logging
 import os
 import sys
+import time
+
+import paho.mqtt.client as mqtt
+
 
 REMOTE_HOST=&#34;menshnet.online&#34;
 VALIDATE_API_URL=&#34;https://menshnet.online/landing/api/access-mqtt&#34;
+SUBSCRIBE_TIMEOUT = 15.0
+HEARTBEAT_INTERVAL = 15.0
 
-
-
+import logging
 Logger = logging.getLogger(&#34;menshnet&#34;)
 
 
@@ -70,15 +73,16 @@ class MqttTransaction(object):
         self.messenger = messenger
         self.topic = topic
         self.data = data
-        self.error = None
         self.complete = threading.Event()
-        self.reply = None
+        self.reply = {&#34;error&#34;: &#34;Internal error&#34;}
 
     # 
     # user defined event handlers
     #
     def on_result(self, mqtt_msg_payload):
-        self.reply = mqtt_msg_payload
+        #self.reply = mqtt_msg_payload
+        self.reply = json.loads(mqtt_msg_payload.decode())
+        
 
     def on_success(self):
         pass
@@ -88,23 +92,20 @@ class MqttTransaction(object):
     #############################
     
     
+    def _on_result(self, mqtt_msg_payload):
+        self.reply = json.loads(mqtt_msg_payload.decode())
 
 
     def wait_for_completion(self, timeout):
         &#34;wait for transaction to complete or timeout&#34;
         Logger.info(&#34;waiting for completion&#34;)
-        if self.complete.wait(timeout):
-            if self.error:
-                self.on_failure(self.error)
-            else:
-                self.on_success()
-        else:
-            self.on_failure(&#34;timeout&#34;)          
+        if not self.complete.wait(timeout):
+            self.on_error(&#34;timeout&#34;)          
 
     def on_error(self, msg):
         &#34;route error to on_failure set complete mutex&#34;
         Logger.error(&#34;on_error: &#34; + msg)
-        self.error = msg         
+        self.reply = {&#34;error&#34;: msg}         
         self.complete.set()
 
         # remove if reply topic exists
@@ -116,15 +117,13 @@ class MqttTransaction(object):
         &#34;route inbound message to on_result&#34;
         Logger.debug(&#34;received reply from remote service&#34;)
         
-        self.on_result(msg.payload)
+        self._on_result(msg.payload)
           
         self.messenger.mqttc.message_callback_remove(self.data[&#39;reply_topic&#39;])
         self.messenger.mqttc.unsubscribe(self.data[&#39;reply_topic&#39;]) 
 
         # unblock and synchronous caller.
         self.complete.set()
-
-
 
     def begin(self):
         &#34;begin transaction&#34;
@@ -138,7 +137,10 @@ class MqttTransaction(object):
         self.data[&#39;reply_topic&#39;] = self.messenger.topic_base+&#34;/tx-reply/&#34;+str(uuid.uuid4()) 
 
         # subscribe to topic
-        self.messenger.subscribe(self.data[&#39;reply_topic&#39;])
+        timeout = self.messenger.subscribe(self.data[&#39;reply_topic&#39;])
+        if timeout:
+            self.on_error(&#34;timeout&#34;)
+            return
 
         self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
         # send to remote host
@@ -150,7 +152,6 @@ class _SyncSubscribe:
     def __init__(self):
         self.pending = {}
         
-
     def subscribe(self, mqtt_client, topic):
         if not mqtt_client:
             raise RuntimeError(&#34;no mqtt client, was connect even called?&#34;)
@@ -160,15 +161,84 @@ class _SyncSubscribe:
             raise RuntimeError(&#34;trying to subscribe to %s but not connected!&#34; % topic) 
 
         self.pending[mid] = threading.Event() 
-        logging.debug(&#34;subscription request for topic=%s mid=%d&#34; % (topic,mid))
-        # wait till on subscribe mid is returned.
-        self.pending[mid].wait()
+        Logger.debug(&#34;subscription request for topic=%s mid=%d&#34; % (topic,mid))
+        # wait until timeout, return true is timeout
+        return not self.pending[mid].wait(SUBSCRIBE_TIMEOUT)
 
     def on_subscribe(self, client, userdata, mid, granted_qos):
         lock = self.pending.get(mid)
         if lock:
-            logging.debug(&#34;subscription for mid=%d confirmed&#34; % mid)
+            Logger.debug(&#34;subscription for mid=%d confirmed&#34; % mid)
             lock.set()
+
+
+class EventRouter(object):
+    &#34;&#34;&#34;
+    Capture events from the backend MenshnetApi object 
+    &#34;&#34;&#34;
+    def __init__(self):
+        self.handlers = {}
+
+    def add(self, codeId, handler):
+        self.handlers[codeId] = handler
+
+    def remove(self, codeId): 
+        del self.handlers[codeId]
+
+    def alarm_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get(&#39;codeId&#39;)
+        h = self.handlers.get(codeId)
+        if h and getattr(h,&#39;on_alarm&#39;) and callable(h.on_alarm):
+            data = jobj[&#39;data&#39;]
+            h.on_alarm(data[&#39;name&#39;], data[&#39;active&#39;], data[&#39;value&#39;])
+        else:
+            Logger.warning(&#34;alarm codeId=%s data=%s&#34; % (codeId,str(jobj[&#39;data&#39;])))
+
+    def stat_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get(&#39;codeId&#39;)
+        h = self.handlers.get(codeId)
+        if h and getattr(h,&#39;on_stat&#39;) and callable(h.on_stat):
+            h.on_alarm(jobj[&#39;data&#39;])
+        else:
+            Logger.info(&#34;stat %s&#34; % str(jobj))
+
+    def error_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get(&#39;codeId&#39;)
+        h = self.handlers.get(codeId)
+        if h and getattr(h,&#39;on_error&#39;) and callable(h.on_error):
+            h.on_error(jobj[&#39;error&#39;], jobj.get(&#39;stacktrace&#39;))
+        else:
+            Logger.error(&#34;error %s&#34; % str(jobj))
+    
+    def info_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get(&#39;codeId&#39;)
+        h = self.handlers.get(codeId)
+        if h and getattr(h,&#39;on_info&#39;) and callable(h.on_info):
+            h.on_info(jobj[&#39;msg&#39;])
+        else:
+            Logger.info(&#34;info %s&#34; % str(jobj))
+
+
+    def setup(self, topic_base, mqttc):
+        self.mqttc = mqttc
+        self.topic_base = topic_base
+
+        self.topic_routes = {
+            topic_base+&#34;/alarm&#34;: self.alarm_handler,
+            topic_base+&#34;/stat&#34;: self.stat_handler,
+            topic_base+&#34;/error&#34;: self.error_handler,
+            topic_base+&#34;/info&#34;: self.info_handler
+        }
+        for t, h in self.topic_routes.items(): 
+            self.mqttc.message_callback_add(t,h)
+
+    def codeIdList(self):
+        return self.handlers.keys() 
+
 
 class Messenger(object):
     def __init__(self, user):
@@ -180,7 +250,29 @@ class Messenger(object):
         self.connected.clear()     
         self.on_connected = None
         self.mqttc = None
+        self.mqtt_auth = None
         self.sync_sub = _SyncSubscribe()
+        
+        self.event_router = EventRouter()
+        self.hb_thread = threading.Thread(target=self._heartbeat,daemon=True)
+        self.hb_thread.start()
+
+    def _heartbeat(self):
+        &#34;&#34;&#34;
+        send periodic heartbeat messages to keep sensors alive. This is done for two reasons
+        as opposed to a last will message. First the client may be alive but not responive
+        so that it is in effect *dead* also the javascript version of the mqtt client does
+        not issue a last will message consitently. 
+        &#34;&#34;&#34;
+        while True:
+            data  = {
+                &#34;codeIdList&#34;: self.event_router.codeIdList()
+            }
+            if len(data[&#34;codeIdList&#34;]) &gt; 0: 
+                topic = self.topic_base+&#34;/heartbeat&#34;
+                self.send(topic, data)
+                time.sleep(HEARTBEAT_INTERVAL)    
+    
 
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
@@ -189,6 +281,7 @@ class Messenger(object):
                 self.on_connected()
             # set connected mutex 
             self.connected.set()
+            self.event_router.setup(self.topic_base, client)
 
     def subscribe(self, topic):
         self.sync_sub.subscribe(self.mqttc, topic) 
@@ -197,11 +290,11 @@ class Messenger(object):
     def send(self, topic, data):
         if not self.mqttc:
             raise RuntimeError(&#34;connect must be called before using this method&#34;)
-        logging.debug(&#34;mqttc.publish(&#39;%s&#39;,payload=&#39;%s&#39;)&#34; % (topic,str(data)))
+        Logger.debug(&#34;mqttc.publish(&#39;%s&#39;,payload=&#39;%s&#39;)&#34; % (topic,str(data)))
         self.mqttc.publish(topic,payload=json.dumps(data))
 
     def on_message(self, client, userdata, msg):
-        logging.debug(msg.topic + &#34; -&gt; &#34; + msg.payload.decode() )
+        Logger.debug(msg.topic + &#34; -&gt; &#34; + msg.payload.decode() )
         
     def connect(self, mqtt_auth, on_connected):
         &#34;connect to mqtt using authentication&#34;
@@ -216,7 +309,7 @@ class Messenger(object):
         u = mqtt_auth[&#39;name&#39;]
         p = mqtt_auth[&#39;pwhash&#39;]
 
-        
+        self.mqtt_auth = mqtt_auth 
 
         self.mqttc.username_pw_set(u, p)
         self.mqttc.ws_set_options()
@@ -236,28 +329,35 @@ class EventSystem(object):
         
     def topic_base(self):
         &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
-        if self.messenger.connected.is_set():
+        if self.messenger and self.messenger.connected.is_set():
             return self.messenger.topic_base
+        else:
+            raise RuntimeError(&#34;Attempt to get topic base while not connected.&#34;)
 
-    def transaction(self, topic, data, response_handler=None, timeout=15.0, error_handler=None):
+    def add_handler(self, codeId, evtHandler):
+        &#34;route events based on a codeId&#34;
+        if self.messenger and self.messenger.connected.is_set():        
+            self.messenger.event_router.add(codeId, evtHandler)
+        else:
+            raise RuntimeError(&#34;Attempt to add event handler while not connected&#34;)
+     
+    def remove_handler(self, codeId):
+        &#34;remove codeId from routing&#34;
+        if self.messenger and self.messenger.connected.is_set():        
+            self.messenger.event_router.remove(codeId)
+        
+
+    def transaction(self, topic, data, timeout=15.0):
         &#34;&#34;&#34;
         Handle a transaction either in synchronous mode (blocking) or async. For async
         response must be a callable object. 
         &#34;&#34;&#34;
         tx = MqttTransaction(self.messenger, topic, data)
 
-        # set error handler, default is to just scream at the error log ;)
-        if error_handler:
-            tx.on_failure = error_handler
-        
-        if response_handler:
-            tx.on_response = response_handler
-        
         tx.begin()
-        if not response_handler:
-            tx.wait_for_completion(timeout)
+        tx.wait_for_completion(timeout)
 
-        # reply will be none if in async mode (response_handler == None)
+        # return a dictionary, tx.reply[&#39;error&#39;] != None if an error occured.
         return tx.reply 
 
 
@@ -282,7 +382,7 @@ class EventSystem(object):
                      }).encode(&#39;utf-8&#39;)
                      self.status_code = 200
             r = Fake_response()
-            logging.debug(&#34;Unit test mode: %s&#34; % str(vars(r)))
+            Logger.debug(&#34;Unit test mode: %s&#34; % str(vars(r)))
         else:
             r = requests.post(VALIDATE_API_URL, json={
                 &#34;apiKey&#34;: apiKey,
@@ -344,7 +444,6 @@ class UnitTest(object):
 
 
 if __name__ == &#39;__main__&#39;:
-    logging.basicConfig(stream=sys.stdout,format=&#34;%(message)s&#34;,level=logging.DEBUG)
     UnitTest().run()
 
 
@@ -365,6 +464,225 @@ if __name__ == &#39;__main__&#39;:
 <section>
 <h2 class="section-title" id="header-classes">Classes</h2>
 <dl>
+<dt id="menshnet.evtsys.EventRouter"><code class="flex name class">
+<span>class <span class="ident">EventRouter</span></span>
+</code></dt>
+<dd>
+<section class="desc"><p>Capture events from the backend MenshnetApi object</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class EventRouter(object):
+    &#34;&#34;&#34;
+    Capture events from the backend MenshnetApi object 
+    &#34;&#34;&#34;
+    def __init__(self):
+        self.handlers = {}
+
+    def add(self, codeId, handler):
+        self.handlers[codeId] = handler
+
+    def remove(self, codeId): 
+        del self.handlers[codeId]
+
+    def alarm_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get(&#39;codeId&#39;)
+        h = self.handlers.get(codeId)
+        if h and getattr(h,&#39;on_alarm&#39;) and callable(h.on_alarm):
+            data = jobj[&#39;data&#39;]
+            h.on_alarm(data[&#39;name&#39;], data[&#39;active&#39;], data[&#39;value&#39;])
+        else:
+            Logger.warning(&#34;alarm codeId=%s data=%s&#34; % (codeId,str(jobj[&#39;data&#39;])))
+
+    def stat_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get(&#39;codeId&#39;)
+        h = self.handlers.get(codeId)
+        if h and getattr(h,&#39;on_stat&#39;) and callable(h.on_stat):
+            h.on_alarm(jobj[&#39;data&#39;])
+        else:
+            Logger.info(&#34;stat %s&#34; % str(jobj))
+
+    def error_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get(&#39;codeId&#39;)
+        h = self.handlers.get(codeId)
+        if h and getattr(h,&#39;on_error&#39;) and callable(h.on_error):
+            h.on_error(jobj[&#39;error&#39;], jobj.get(&#39;stacktrace&#39;))
+        else:
+            Logger.error(&#34;error %s&#34; % str(jobj))
+    
+    def info_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get(&#39;codeId&#39;)
+        h = self.handlers.get(codeId)
+        if h and getattr(h,&#39;on_info&#39;) and callable(h.on_info):
+            h.on_info(jobj[&#39;msg&#39;])
+        else:
+            Logger.info(&#34;info %s&#34; % str(jobj))
+
+
+    def setup(self, topic_base, mqttc):
+        self.mqttc = mqttc
+        self.topic_base = topic_base
+
+        self.topic_routes = {
+            topic_base+&#34;/alarm&#34;: self.alarm_handler,
+            topic_base+&#34;/stat&#34;: self.stat_handler,
+            topic_base+&#34;/error&#34;: self.error_handler,
+            topic_base+&#34;/info&#34;: self.info_handler
+        }
+        for t, h in self.topic_routes.items(): 
+            self.mqttc.message_callback_add(t,h)
+
+    def codeIdList(self):
+        return self.handlers.keys() </code></pre>
+</details>
+<h3>Methods</h3>
+<dl>
+<dt id="menshnet.evtsys.EventRouter.add"><code class="name flex">
+<span>def <span class="ident">add</span></span>(<span>self, codeId, handler)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def add(self, codeId, handler):
+    self.handlers[codeId] = handler</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.EventRouter.alarm_handler"><code class="name flex">
+<span>def <span class="ident">alarm_handler</span></span>(<span>self, client, userdata, msg)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def alarm_handler(self, client, userdata, msg):
+    jobj = json.loads(msg.payload.decode())
+    codeId = jobj.get(&#39;codeId&#39;)
+    h = self.handlers.get(codeId)
+    if h and getattr(h,&#39;on_alarm&#39;) and callable(h.on_alarm):
+        data = jobj[&#39;data&#39;]
+        h.on_alarm(data[&#39;name&#39;], data[&#39;active&#39;], data[&#39;value&#39;])
+    else:
+        Logger.warning(&#34;alarm codeId=%s data=%s&#34; % (codeId,str(jobj[&#39;data&#39;])))</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.EventRouter.codeIdList"><code class="name flex">
+<span>def <span class="ident">codeIdList</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def codeIdList(self):
+    return self.handlers.keys() </code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.EventRouter.error_handler"><code class="name flex">
+<span>def <span class="ident">error_handler</span></span>(<span>self, client, userdata, msg)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def error_handler(self, client, userdata, msg):
+    jobj = json.loads(msg.payload.decode())
+    codeId = jobj.get(&#39;codeId&#39;)
+    h = self.handlers.get(codeId)
+    if h and getattr(h,&#39;on_error&#39;) and callable(h.on_error):
+        h.on_error(jobj[&#39;error&#39;], jobj.get(&#39;stacktrace&#39;))
+    else:
+        Logger.error(&#34;error %s&#34; % str(jobj))</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.EventRouter.info_handler"><code class="name flex">
+<span>def <span class="ident">info_handler</span></span>(<span>self, client, userdata, msg)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def info_handler(self, client, userdata, msg):
+    jobj = json.loads(msg.payload.decode())
+    codeId = jobj.get(&#39;codeId&#39;)
+    h = self.handlers.get(codeId)
+    if h and getattr(h,&#39;on_info&#39;) and callable(h.on_info):
+        h.on_info(jobj[&#39;msg&#39;])
+    else:
+        Logger.info(&#34;info %s&#34; % str(jobj))</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.EventRouter.remove"><code class="name flex">
+<span>def <span class="ident">remove</span></span>(<span>self, codeId)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def remove(self, codeId): 
+    del self.handlers[codeId]</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.EventRouter.setup"><code class="name flex">
+<span>def <span class="ident">setup</span></span>(<span>self, topic_base, mqttc)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def setup(self, topic_base, mqttc):
+    self.mqttc = mqttc
+    self.topic_base = topic_base
+
+    self.topic_routes = {
+        topic_base+&#34;/alarm&#34;: self.alarm_handler,
+        topic_base+&#34;/stat&#34;: self.stat_handler,
+        topic_base+&#34;/error&#34;: self.error_handler,
+        topic_base+&#34;/info&#34;: self.info_handler
+    }
+    for t, h in self.topic_routes.items(): 
+        self.mqttc.message_callback_add(t,h)</code></pre>
+</details>
+</dd>
+<dt id="menshnet.evtsys.EventRouter.stat_handler"><code class="name flex">
+<span>def <span class="ident">stat_handler</span></span>(<span>self, client, userdata, msg)</span>
+</code></dt>
+<dd>
+<section class="desc"></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def stat_handler(self, client, userdata, msg):
+    jobj = json.loads(msg.payload.decode())
+    codeId = jobj.get(&#39;codeId&#39;)
+    h = self.handlers.get(codeId)
+    if h and getattr(h,&#39;on_stat&#39;) and callable(h.on_stat):
+        h.on_alarm(jobj[&#39;data&#39;])
+    else:
+        Logger.info(&#34;stat %s&#34; % str(jobj))</code></pre>
+</details>
+</dd>
+</dl>
+</dd>
 <dt id="menshnet.evtsys.EventSystem"><code class="flex name class">
 <span>class <span class="ident">EventSystem</span></span>
 </code></dt>
@@ -383,28 +701,35 @@ if __name__ == &#39;__main__&#39;:
         
     def topic_base(self):
         &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
-        if self.messenger.connected.is_set():
+        if self.messenger and self.messenger.connected.is_set():
             return self.messenger.topic_base
+        else:
+            raise RuntimeError(&#34;Attempt to get topic base while not connected.&#34;)
 
-    def transaction(self, topic, data, response_handler=None, timeout=15.0, error_handler=None):
+    def add_handler(self, codeId, evtHandler):
+        &#34;route events based on a codeId&#34;
+        if self.messenger and self.messenger.connected.is_set():        
+            self.messenger.event_router.add(codeId, evtHandler)
+        else:
+            raise RuntimeError(&#34;Attempt to add event handler while not connected&#34;)
+     
+    def remove_handler(self, codeId):
+        &#34;remove codeId from routing&#34;
+        if self.messenger and self.messenger.connected.is_set():        
+            self.messenger.event_router.remove(codeId)
+        
+
+    def transaction(self, topic, data, timeout=15.0):
         &#34;&#34;&#34;
         Handle a transaction either in synchronous mode (blocking) or async. For async
         response must be a callable object. 
         &#34;&#34;&#34;
         tx = MqttTransaction(self.messenger, topic, data)
 
-        # set error handler, default is to just scream at the error log ;)
-        if error_handler:
-            tx.on_failure = error_handler
-        
-        if response_handler:
-            tx.on_response = response_handler
-        
         tx.begin()
-        if not response_handler:
-            tx.wait_for_completion(timeout)
+        tx.wait_for_completion(timeout)
 
-        # reply will be none if in async mode (response_handler == None)
+        # return a dictionary, tx.reply[&#39;error&#39;] != None if an error occured.
         return tx.reply 
 
 
@@ -429,7 +754,7 @@ if __name__ == &#39;__main__&#39;:
                      }).encode(&#39;utf-8&#39;)
                      self.status_code = 200
             r = Fake_response()
-            logging.debug(&#34;Unit test mode: %s&#34; % str(vars(r)))
+            Logger.debug(&#34;Unit test mode: %s&#34; % str(vars(r)))
         else:
             r = requests.post(VALIDATE_API_URL, json={
                 &#34;apiKey&#34;: apiKey,
@@ -451,6 +776,23 @@ if __name__ == &#39;__main__&#39;:
 </details>
 <h3>Methods</h3>
 <dl>
+<dt id="menshnet.evtsys.EventSystem.add_handler"><code class="name flex">
+<span>def <span class="ident">add_handler</span></span>(<span>self, codeId, evtHandler)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>route events based on a codeId</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def add_handler(self, codeId, evtHandler):
+    &#34;route events based on a codeId&#34;
+    if self.messenger and self.messenger.connected.is_set():        
+        self.messenger.event_router.add(codeId, evtHandler)
+    else:
+        raise RuntimeError(&#34;Attempt to add event handler while not connected&#34;)</code></pre>
+</details>
+</dd>
 <dt id="menshnet.evtsys.EventSystem.connect"><code class="name flex">
 <span>def <span class="ident">connect</span></span>(<span>self, apiKey, user, **kwArgs)</span>
 </code></dt>
@@ -481,7 +823,7 @@ connect to mqtt.</p></section>
                  }).encode(&#39;utf-8&#39;)
                  self.status_code = 200
         r = Fake_response()
-        logging.debug(&#34;Unit test mode: %s&#34; % str(vars(r)))
+        Logger.debug(&#34;Unit test mode: %s&#34; % str(vars(r)))
     else:
         r = requests.post(VALIDATE_API_URL, json={
             &#34;apiKey&#34;: apiKey,
@@ -502,6 +844,21 @@ connect to mqtt.</p></section>
         raise RuntimeError(&#34;HTTP %d Error while validating apiKey &#39;%s&#39;&#34; % (r.status_code,r.content))</code></pre>
 </details>
 </dd>
+<dt id="menshnet.evtsys.EventSystem.remove_handler"><code class="name flex">
+<span>def <span class="ident">remove_handler</span></span>(<span>self, codeId)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>remove codeId from routing</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def remove_handler(self, codeId):
+    &#34;remove codeId from routing&#34;
+    if self.messenger and self.messenger.connected.is_set():        
+        self.messenger.event_router.remove(codeId)</code></pre>
+</details>
+</dd>
 <dt id="menshnet.evtsys.EventSystem.topic_base"><code class="name flex">
 <span>def <span class="ident">topic_base</span></span>(<span>self)</span>
 </code></dt>
@@ -513,12 +870,14 @@ connect to mqtt.</p></section>
 </summary>
 <pre><code class="python">def topic_base(self):
     &#34;return base topic path allocated for this user: menshnet/client/&lt;username&gt;/#&#34;
-    if self.messenger.connected.is_set():
-        return self.messenger.topic_base</code></pre>
+    if self.messenger and self.messenger.connected.is_set():
+        return self.messenger.topic_base
+    else:
+        raise RuntimeError(&#34;Attempt to get topic base while not connected.&#34;)</code></pre>
 </details>
 </dd>
 <dt id="menshnet.evtsys.EventSystem.transaction"><code class="name flex">
-<span>def <span class="ident">transaction</span></span>(<span>self, topic, data, response_handler=None, timeout=15.0, error_handler=None)</span>
+<span>def <span class="ident">transaction</span></span>(<span>self, topic, data, timeout=15.0)</span>
 </code></dt>
 <dd>
 <section class="desc"><p>Handle a transaction either in synchronous mode (blocking) or async. For async
@@ -527,25 +886,17 @@ response must be a callable object.</p></section>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def transaction(self, topic, data, response_handler=None, timeout=15.0, error_handler=None):
+<pre><code class="python">def transaction(self, topic, data, timeout=15.0):
     &#34;&#34;&#34;
     Handle a transaction either in synchronous mode (blocking) or async. For async
     response must be a callable object. 
     &#34;&#34;&#34;
     tx = MqttTransaction(self.messenger, topic, data)
 
-    # set error handler, default is to just scream at the error log ;)
-    if error_handler:
-        tx.on_failure = error_handler
-    
-    if response_handler:
-        tx.on_response = response_handler
-    
     tx.begin()
-    if not response_handler:
-        tx.wait_for_completion(timeout)
+    tx.wait_for_completion(timeout)
 
-    # reply will be none if in async mode (response_handler == None)
+    # return a dictionary, tx.reply[&#39;error&#39;] != None if an error occured.
     return tx.reply </code></pre>
 </details>
 </dd>
@@ -571,7 +922,29 @@ response must be a callable object.</p></section>
         self.connected.clear()     
         self.on_connected = None
         self.mqttc = None
+        self.mqtt_auth = None
         self.sync_sub = _SyncSubscribe()
+        
+        self.event_router = EventRouter()
+        self.hb_thread = threading.Thread(target=self._heartbeat,daemon=True)
+        self.hb_thread.start()
+
+    def _heartbeat(self):
+        &#34;&#34;&#34;
+        send periodic heartbeat messages to keep sensors alive. This is done for two reasons
+        as opposed to a last will message. First the client may be alive but not responive
+        so that it is in effect *dead* also the javascript version of the mqtt client does
+        not issue a last will message consitently. 
+        &#34;&#34;&#34;
+        while True:
+            data  = {
+                &#34;codeIdList&#34;: self.event_router.codeIdList()
+            }
+            if len(data[&#34;codeIdList&#34;]) &gt; 0: 
+                topic = self.topic_base+&#34;/heartbeat&#34;
+                self.send(topic, data)
+                time.sleep(HEARTBEAT_INTERVAL)    
+    
 
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
@@ -580,6 +953,7 @@ response must be a callable object.</p></section>
                 self.on_connected()
             # set connected mutex 
             self.connected.set()
+            self.event_router.setup(self.topic_base, client)
 
     def subscribe(self, topic):
         self.sync_sub.subscribe(self.mqttc, topic) 
@@ -588,11 +962,11 @@ response must be a callable object.</p></section>
     def send(self, topic, data):
         if not self.mqttc:
             raise RuntimeError(&#34;connect must be called before using this method&#34;)
-        logging.debug(&#34;mqttc.publish(&#39;%s&#39;,payload=&#39;%s&#39;)&#34; % (topic,str(data)))
+        Logger.debug(&#34;mqttc.publish(&#39;%s&#39;,payload=&#39;%s&#39;)&#34; % (topic,str(data)))
         self.mqttc.publish(topic,payload=json.dumps(data))
 
     def on_message(self, client, userdata, msg):
-        logging.debug(msg.topic + &#34; -&gt; &#34; + msg.payload.decode() )
+        Logger.debug(msg.topic + &#34; -&gt; &#34; + msg.payload.decode() )
         
     def connect(self, mqtt_auth, on_connected):
         &#34;connect to mqtt using authentication&#34;
@@ -607,7 +981,7 @@ response must be a callable object.</p></section>
         u = mqtt_auth[&#39;name&#39;]
         p = mqtt_auth[&#39;pwhash&#39;]
 
-        
+        self.mqtt_auth = mqtt_auth 
 
         self.mqttc.username_pw_set(u, p)
         self.mqttc.ws_set_options()
@@ -641,7 +1015,7 @@ response must be a callable object.</p></section>
     u = mqtt_auth[&#39;name&#39;]
     p = mqtt_auth[&#39;pwhash&#39;]
 
-    
+    self.mqtt_auth = mqtt_auth 
 
     self.mqttc.username_pw_set(u, p)
     self.mqttc.ws_set_options()
@@ -667,7 +1041,8 @@ response must be a callable object.</p></section>
         if self.on_connected:
             self.on_connected()
         # set connected mutex 
-        self.connected.set()</code></pre>
+        self.connected.set()
+        self.event_router.setup(self.topic_base, client)</code></pre>
 </details>
 </dd>
 <dt id="menshnet.evtsys.Messenger.on_message"><code class="name flex">
@@ -680,7 +1055,7 @@ response must be a callable object.</p></section>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def on_message(self, client, userdata, msg):
-    logging.debug(msg.topic + &#34; -&gt; &#34; + msg.payload.decode() )</code></pre>
+    Logger.debug(msg.topic + &#34; -&gt; &#34; + msg.payload.decode() )</code></pre>
 </details>
 </dd>
 <dt id="menshnet.evtsys.Messenger.send"><code class="name flex">
@@ -695,7 +1070,7 @@ response must be a callable object.</p></section>
 <pre><code class="python">def send(self, topic, data):
     if not self.mqttc:
         raise RuntimeError(&#34;connect must be called before using this method&#34;)
-    logging.debug(&#34;mqttc.publish(&#39;%s&#39;,payload=&#39;%s&#39;)&#34; % (topic,str(data)))
+    Logger.debug(&#34;mqttc.publish(&#39;%s&#39;,payload=&#39;%s&#39;)&#34; % (topic,str(data)))
     self.mqttc.publish(topic,payload=json.dumps(data))</code></pre>
 </details>
 </dd>
@@ -762,15 +1137,16 @@ response topic
         self.messenger = messenger
         self.topic = topic
         self.data = data
-        self.error = None
         self.complete = threading.Event()
-        self.reply = None
+        self.reply = {&#34;error&#34;: &#34;Internal error&#34;}
 
     # 
     # user defined event handlers
     #
     def on_result(self, mqtt_msg_payload):
-        self.reply = mqtt_msg_payload
+        #self.reply = mqtt_msg_payload
+        self.reply = json.loads(mqtt_msg_payload.decode())
+        
 
     def on_success(self):
         pass
@@ -780,23 +1156,20 @@ response topic
     #############################
     
     
+    def _on_result(self, mqtt_msg_payload):
+        self.reply = json.loads(mqtt_msg_payload.decode())
 
 
     def wait_for_completion(self, timeout):
         &#34;wait for transaction to complete or timeout&#34;
         Logger.info(&#34;waiting for completion&#34;)
-        if self.complete.wait(timeout):
-            if self.error:
-                self.on_failure(self.error)
-            else:
-                self.on_success()
-        else:
-            self.on_failure(&#34;timeout&#34;)          
+        if not self.complete.wait(timeout):
+            self.on_error(&#34;timeout&#34;)          
 
     def on_error(self, msg):
         &#34;route error to on_failure set complete mutex&#34;
         Logger.error(&#34;on_error: &#34; + msg)
-        self.error = msg         
+        self.reply = {&#34;error&#34;: msg}         
         self.complete.set()
 
         # remove if reply topic exists
@@ -808,15 +1181,13 @@ response topic
         &#34;route inbound message to on_result&#34;
         Logger.debug(&#34;received reply from remote service&#34;)
         
-        self.on_result(msg.payload)
+        self._on_result(msg.payload)
           
         self.messenger.mqttc.message_callback_remove(self.data[&#39;reply_topic&#39;])
         self.messenger.mqttc.unsubscribe(self.data[&#39;reply_topic&#39;]) 
 
         # unblock and synchronous caller.
         self.complete.set()
-
-
 
     def begin(self):
         &#34;begin transaction&#34;
@@ -830,7 +1201,10 @@ response topic
         self.data[&#39;reply_topic&#39;] = self.messenger.topic_base+&#34;/tx-reply/&#34;+str(uuid.uuid4()) 
 
         # subscribe to topic
-        self.messenger.subscribe(self.data[&#39;reply_topic&#39;])
+        timeout = self.messenger.subscribe(self.data[&#39;reply_topic&#39;])
+        if timeout:
+            self.on_error(&#34;timeout&#34;)
+            return
 
         self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
         # send to remote host
@@ -860,7 +1234,10 @@ response topic
     self.data[&#39;reply_topic&#39;] = self.messenger.topic_base+&#34;/tx-reply/&#34;+str(uuid.uuid4()) 
 
     # subscribe to topic
-    self.messenger.subscribe(self.data[&#39;reply_topic&#39;])
+    timeout = self.messenger.subscribe(self.data[&#39;reply_topic&#39;])
+    if timeout:
+        self.on_error(&#34;timeout&#34;)
+        return
 
     self.messenger.mqttc.message_callback_add(self.data[&#39;reply_topic&#39;], self.reply_handler)
     # send to remote host
@@ -880,7 +1257,7 @@ response topic
 <pre><code class="python">def on_error(self, msg):
     &#34;route error to on_failure set complete mutex&#34;
     Logger.error(&#34;on_error: &#34; + msg)
-    self.error = msg         
+    self.reply = {&#34;error&#34;: msg}         
     self.complete.set()
 
     # remove if reply topic exists
@@ -912,7 +1289,8 @@ response topic
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def on_result(self, mqtt_msg_payload):
-    self.reply = mqtt_msg_payload</code></pre>
+    #self.reply = mqtt_msg_payload
+    self.reply = json.loads(mqtt_msg_payload.decode())</code></pre>
 </details>
 </dd>
 <dt id="menshnet.evtsys.MqttTransaction.on_success"><code class="name flex">
@@ -941,7 +1319,7 @@ response topic
     &#34;route inbound message to on_result&#34;
     Logger.debug(&#34;received reply from remote service&#34;)
     
-    self.on_result(msg.payload)
+    self._on_result(msg.payload)
       
     self.messenger.mqttc.message_callback_remove(self.data[&#39;reply_topic&#39;])
     self.messenger.mqttc.unsubscribe(self.data[&#39;reply_topic&#39;]) 
@@ -962,13 +1340,8 @@ response topic
 <pre><code class="python">def wait_for_completion(self, timeout):
     &#34;wait for transaction to complete or timeout&#34;
     Logger.info(&#34;waiting for completion&#34;)
-    if self.complete.wait(timeout):
-        if self.error:
-            self.on_failure(self.error)
-        else:
-            self.on_success()
-    else:
-        self.on_failure(&#34;timeout&#34;)          </code></pre>
+    if not self.complete.wait(timeout):
+        self.on_error(&#34;timeout&#34;)          </code></pre>
 </details>
 </dd>
 </dl>
@@ -1104,9 +1477,24 @@ response topic
 <li><h3><a href="#header-classes">Classes</a></h3>
 <ul>
 <li>
+<h4><code><a title="menshnet.evtsys.EventRouter" href="#menshnet.evtsys.EventRouter">EventRouter</a></code></h4>
+<ul class="two-column">
+<li><code><a title="menshnet.evtsys.EventRouter.add" href="#menshnet.evtsys.EventRouter.add">add</a></code></li>
+<li><code><a title="menshnet.evtsys.EventRouter.alarm_handler" href="#menshnet.evtsys.EventRouter.alarm_handler">alarm_handler</a></code></li>
+<li><code><a title="menshnet.evtsys.EventRouter.codeIdList" href="#menshnet.evtsys.EventRouter.codeIdList">codeIdList</a></code></li>
+<li><code><a title="menshnet.evtsys.EventRouter.error_handler" href="#menshnet.evtsys.EventRouter.error_handler">error_handler</a></code></li>
+<li><code><a title="menshnet.evtsys.EventRouter.info_handler" href="#menshnet.evtsys.EventRouter.info_handler">info_handler</a></code></li>
+<li><code><a title="menshnet.evtsys.EventRouter.remove" href="#menshnet.evtsys.EventRouter.remove">remove</a></code></li>
+<li><code><a title="menshnet.evtsys.EventRouter.setup" href="#menshnet.evtsys.EventRouter.setup">setup</a></code></li>
+<li><code><a title="menshnet.evtsys.EventRouter.stat_handler" href="#menshnet.evtsys.EventRouter.stat_handler">stat_handler</a></code></li>
+</ul>
+</li>
+<li>
 <h4><code><a title="menshnet.evtsys.EventSystem" href="#menshnet.evtsys.EventSystem">EventSystem</a></code></h4>
 <ul class="">
+<li><code><a title="menshnet.evtsys.EventSystem.add_handler" href="#menshnet.evtsys.EventSystem.add_handler">add_handler</a></code></li>
 <li><code><a title="menshnet.evtsys.EventSystem.connect" href="#menshnet.evtsys.EventSystem.connect">connect</a></code></li>
+<li><code><a title="menshnet.evtsys.EventSystem.remove_handler" href="#menshnet.evtsys.EventSystem.remove_handler">remove_handler</a></code></li>
 <li><code><a title="menshnet.evtsys.EventSystem.topic_base" href="#menshnet.evtsys.EventSystem.topic_base">topic_base</a></code></li>
 <li><code><a title="menshnet.evtsys.EventSystem.transaction" href="#menshnet.evtsys.EventSystem.transaction">transaction</a></code></li>
 </ul>

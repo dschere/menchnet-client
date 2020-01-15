@@ -30,12 +30,129 @@
 Menshnet client module
 &#34;&#34;&#34;
 
-from .store import StoredClass
+
 from .evtsys import EventSystem    
-from .uploader import Upload 
+
+import logging
+
+Logger = logging.getLogger(&#34;menshnet&#34;)
 
 
 
+class EventHandler(object):
+    &#34;&#34;&#34;
+    Capture events from a running sensor on our server
+    &#34;&#34;&#34;
+
+    def on_error(self, errmsg, server_side_stack_trace):
+        &#34;&#34;&#34;
+        Capture error message 
+
+        errmsg -&gt; textual message describing error
+        server_side_stack_trace -&gt; either a stack trace acquired by calling
+                                   traceback.format_exc() which should pinpoint
+                                   a fault in code or None if not available. 
+        &#34;&#34;&#34;
+
+    def on_info(self, msg):
+        &#34;&#34;&#34;
+        Capture info message
+
+        ```
+           In your sensor:
+           self.api.send_info(&#34;this is a test&#34;)
+ 
+           results in this function being called with
+           msg == &#34;this is a test&#34;
+        ```
+        &#34;&#34;&#34;
+        
+
+    def on_stat(self, data):
+        &#34;&#34;&#34;
+        Capture server side statistic messages from a sensor.
+        
+        ```
+            def onInit(self, api, cfg):
+                self.api = api # save MenshnetApi
+
+            ... later in code send a stat ...
+            self.api.send_stat({&#34;ssi&#34;:score})
+
+        # receive stat message from your sensor 
+        def on_stat(self, data -&gt; {&#34;ssi&#34;:score}) 
+        ```
+        &#34;&#34;&#34;
+        
+
+    def on_alarm(self, name, active, value):
+        &#34;&#34;&#34;
+        Capture a server side alarm from your sensor.
+
+        ```
+            def onInit(self, api, cfg):
+                ... 
+                # set an alarm 
+                # add(self, name, set_threshold, clear_threshold)
+                self.api.alarms.add(&#34;frozen-video&#34;,self.threshold,self.threshold-0.05)
+
+            # ... then later the alarm is triggered when/if &#39;score&#39;
+            # exceeds set_threshold value=1 and event triggered or
+            #  
+            self.api.alarms.update(&#34;frozen-video&#34;,score) 
+        ```
+        &#34;&#34;&#34;
+         
+ 
+class Sensor(object):
+    &#34;&#34;&#34; 
+    command and control over remote sensor
+    &#34;&#34;&#34;
+    def __init__(self, evs, sensor_name, cfg, evt_handler):
+        self.evs = evs 
+        self.name = sensor_name
+        self.cfg = cfg
+        self.handler = evt_handler
+        self.codeId = None
+
+
+    def stop(self): 
+        &#34;stop reunning sensor, remove inbound event routing&#34;
+        if not self.codeId:
+            Logger.warning(&#34;stop called but sensor does not appear active&#34;)
+        else:
+            topic = self.evs.topic_base()+&#34;/stop_sensor&#34; 
+            self.evs.transaction(topic , {
+                &#34;codeId&#34;: self.codeId
+            })
+            self.evs.remove_handler(self.codeId)
+            
+
+    def start(self):
+        &#34;&#34;&#34;
+        start package name &lt;self.name&gt; within the user&#39;s git 
+        project.
+        &#34;&#34;&#34;
+        topic = self.evs.topic_base()+&#34;/start_sensor&#34;
+        auth = self.evs.messenger.mqtt_auth
+        data = {
+            &#39;mqttCred&#39;: (auth[&#39;name&#39;],auth[&#39;pwhash&#39;]),
+            &#39;name&#39;: self.name,
+            &#39;cfg&#39; : self.cfg
+        }  
+        Logger.info(&#34;starting sensor %s&#34; % self.name)
+        Logger.debug(&#34;Sensor.start sending %s&#34; % str(data))
+        # start remote service get codeId from server
+        # which identfies the instance of the sensor that 
+        # is running. 
+        r = self.evs.transaction(topic , data)
+        if r.get(&#39;error&#39;):
+            self.handler.on_error(r.get(&#39;error&#39;),None)
+        else:
+            self.codeId = r.get(&#39;codeId&#39;) 
+            self.evs.add_handler(self.codeId, self.handler)
+
+        Logger.debug(&#34;Sensor.start sending %s&#34; % str(data))
 
 class Client(object):
     &#34;&#34;&#34;
@@ -66,91 +183,34 @@ class Client(object):
         &#34;&#34;&#34;
         self.evs.connect(apiKey, user, **kwArgs)
         
-    def load(self, name, **kwArgs):
-        &#34;&#34;&#34;
-        Load an existing stored class
 
-        name: Unique name for the class previously uploaded
-        kwArgs:
-            Optional callback 
-                onLoaded, if load(name, onLoaded=callback) is defined
-                then load will become an async function and call onLoaded
-                when complete. 
+    def register(self, gitpath, branch=None):
         &#34;&#34;&#34;
+        register a git repo on menchnet, you may specify an optional branch 
+        if not then it will clone the master branch
+
+        gitpath: url of your repo &#39;git clone &lt;gitpath&gt;&#39;
+        branch: if provided a specifc branch &#39;git -b &lt;branch&gt; &lt;gitpath&gt;&#39;   
+        &#34;&#34;&#34;
+        topic = self.evs.messenger.topic_base+&#34;/git_registration&#34; 
+        return self.evs.transaction(topic , {
+            &#34;gitpath&#34;: gitpath,
+            &#34;branch&#34;: branch  
+        })
         
-    def upload(self, **kwArgs):
+    
+    def sensor(self, sensor_name, cfg, evt_handler):
         &#34;&#34;&#34;
-        Upload a stored class to menshnet
-
-        upload(sensor_name=&#34;MySensor&#34;,filename=&#34;path-to-code-on-host-machine&#34;)
-        upload(sensor_name=&#34;MySensor&#34;,url=&#34;http[s]://..../path-to-file&#34;,module_name=&#34;&#34;)
-        upload(sensor_name=&#34;MySensor&#34;,git=&#34;git-project-path-to-clone&#34;) 
-
-
-        sensor_name: User chosen identifier that is used to start/stop
-                     a sensor and acts as a filter for inbound events.
-
-        If filename is specified:
-
-            filename is a python module that will be uploaded to the server
-            for future use. It will be identified on the server by the value of
-            sensor_name. See Note #1 below regarding the requirements for 
-            this module.
-
-        If git is specified:
-
-            git is the path to a git repo that will be cloned server side.
-            
-            module_name is the name of a file within the top level path of the
-            git repo containing the server side code to be executed. See
-            Note #1 below requirments for this module.
-
-        If url is specified:
-
-            url is an http[s] url where to download the user supplied python 
-            sensor module. See Note #1 below regarding the requirements for 
-            this module.
-
-
-
-        Note #1: Sensor module requirements.
-
-        The user supplied sensor module must impliment a register() function.
-        This function must return an instance of an object that is derived off
-        of one of menshnet&#39;s predefined base classes in the server side
-        sensor module. Example:
-
-
-        ```
-        from sensors.vp import VideoProcessor
-
-        class MySensor(VideoProcessor):
-            def onInit(self, api, cfg):
-                &#34;initialization&#34;
-
-            def onImage(self, img):
-                &#34;handle each snapshot of video&#34;
-
-
-        def register():
-            return MySensor()
-
-        ```    
-
-
-
-  
-
-        To make this function async as opposed to synchronous add the
-        onUploaded(error=&#34;error message&#34;|None) callback, if error == None
-        upload was successful.
-
-        upload(opUploaded=callback, ...)        
+        Return a sensor object that acts as a controller for a remote executing process.
+                 
+        sensor_name : The name of a python package in your repo:
+                     &lt;gitpath you provided in register&gt;/modules/&lt;sensor_name&gt;
+        cfg         : A python dictionary containing configuration information
+                     obj = &lt;gitpath you provided in register&gt;/modules/&lt;sensor_name&gt;.register()
+                     obj.onInit(MenshnetApi, cfg ) &lt;- gets passed to onInit
+        evt_handler : Instance of EventHandler which will receive events from sensor
         &#34;&#34;&#34;
-        return Upload(self, **kwArgs)
-        
-
-
+        return Sensor(self.evs, sensor_name, cfg, evt_handler)
     
         </code></pre>
 </details>
@@ -208,88 +268,34 @@ server.</p>
         &#34;&#34;&#34;
         self.evs.connect(apiKey, user, **kwArgs)
         
-    def load(self, name, **kwArgs):
-        &#34;&#34;&#34;
-        Load an existing stored class
 
-        name: Unique name for the class previously uploaded
-        kwArgs:
-            Optional callback 
-                onLoaded, if load(name, onLoaded=callback) is defined
-                then load will become an async function and call onLoaded
-                when complete. 
+    def register(self, gitpath, branch=None):
         &#34;&#34;&#34;
+        register a git repo on menchnet, you may specify an optional branch 
+        if not then it will clone the master branch
+
+        gitpath: url of your repo &#39;git clone &lt;gitpath&gt;&#39;
+        branch: if provided a specifc branch &#39;git -b &lt;branch&gt; &lt;gitpath&gt;&#39;   
+        &#34;&#34;&#34;
+        topic = self.evs.messenger.topic_base+&#34;/git_registration&#34; 
+        return self.evs.transaction(topic , {
+            &#34;gitpath&#34;: gitpath,
+            &#34;branch&#34;: branch  
+        })
         
-    def upload(self, **kwArgs):
+    
+    def sensor(self, sensor_name, cfg, evt_handler):
         &#34;&#34;&#34;
-        Upload a stored class to menshnet
-
-        upload(sensor_name=&#34;MySensor&#34;,filename=&#34;path-to-code-on-host-machine&#34;)
-        upload(sensor_name=&#34;MySensor&#34;,url=&#34;http[s]://..../path-to-file&#34;,module_name=&#34;&#34;)
-        upload(sensor_name=&#34;MySensor&#34;,git=&#34;git-project-path-to-clone&#34;) 
-
-
-        sensor_name: User chosen identifier that is used to start/stop
-                     a sensor and acts as a filter for inbound events.
-
-        If filename is specified:
-
-            filename is a python module that will be uploaded to the server
-            for future use. It will be identified on the server by the value of
-            sensor_name. See Note #1 below regarding the requirements for 
-            this module.
-
-        If git is specified:
-
-            git is the path to a git repo that will be cloned server side.
-            
-            module_name is the name of a file within the top level path of the
-            git repo containing the server side code to be executed. See
-            Note #1 below requirments for this module.
-
-        If url is specified:
-
-            url is an http[s] url where to download the user supplied python 
-            sensor module. See Note #1 below regarding the requirements for 
-            this module.
-
-
-
-        Note #1: Sensor module requirements.
-
-        The user supplied sensor module must impliment a register() function.
-        This function must return an instance of an object that is derived off
-        of one of menshnet&#39;s predefined base classes in the server side
-        sensor module. Example:
-
-
-        ```
-        from sensors.vp import VideoProcessor
-
-        class MySensor(VideoProcessor):
-            def onInit(self, api, cfg):
-                &#34;initialization&#34;
-
-            def onImage(self, img):
-                &#34;handle each snapshot of video&#34;
-
-
-        def register():
-            return MySensor()
-
-        ```    
-
-
-
-  
-
-        To make this function async as opposed to synchronous add the
-        onUploaded(error=&#34;error message&#34;|None) callback, if error == None
-        upload was successful.
-
-        upload(opUploaded=callback, ...)        
+        Return a sensor object that acts as a controller for a remote executing process.
+                 
+        sensor_name : The name of a python package in your repo:
+                     &lt;gitpath you provided in register&gt;/modules/&lt;sensor_name&gt;
+        cfg         : A python dictionary containing configuration information
+                     obj = &lt;gitpath you provided in register&gt;/modules/&lt;sensor_name&gt;.register()
+                     obj.onInit(MenshnetApi, cfg ) &lt;- gets passed to onInit
+        evt_handler : Instance of EventHandler which will receive events from sensor
         &#34;&#34;&#34;
-        return Upload(self, **kwArgs)</code></pre>
+        return Sensor(self.evs, sensor_name, cfg, evt_handler)</code></pre>
 </details>
 <h3>Methods</h3>
 <dl>
@@ -325,159 +331,388 @@ username associated with your menshnet account
     self.evs.connect(apiKey, user, **kwArgs)</code></pre>
 </details>
 </dd>
-<dt id="menshnet.client.Client.load"><code class="name flex">
-<span>def <span class="ident">load</span></span>(<span>self, name, **kwArgs)</span>
+<dt id="menshnet.client.Client.register"><code class="name flex">
+<span>def <span class="ident">register</span></span>(<span>self, gitpath, branch=None)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Load an existing stored class</p>
-<p>name: Unique name for the class previously uploaded
-kwArgs:
-Optional callback
-onLoaded, if load(name, onLoaded=callback) is defined
-then load will become an async function and call onLoaded
-when complete.</p></section>
+<section class="desc"><p>register a git repo on menchnet, you may specify an optional branch
+if not then it will clone the master branch</p>
+<p>gitpath: url of your repo 'git clone <gitpath>'
+branch: if provided a specifc branch 'git -b <branch> <gitpath>'</p></section>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def load(self, name, **kwArgs):
+<pre><code class="python">def register(self, gitpath, branch=None):
     &#34;&#34;&#34;
-    Load an existing stored class
+    register a git repo on menchnet, you may specify an optional branch 
+    if not then it will clone the master branch
 
-    name: Unique name for the class previously uploaded
-    kwArgs:
-        Optional callback 
-            onLoaded, if load(name, onLoaded=callback) is defined
-            then load will become an async function and call onLoaded
-            when complete. 
+    gitpath: url of your repo &#39;git clone &lt;gitpath&gt;&#39;
+    branch: if provided a specifc branch &#39;git -b &lt;branch&gt; &lt;gitpath&gt;&#39;   
+    &#34;&#34;&#34;
+    topic = self.evs.messenger.topic_base+&#34;/git_registration&#34; 
+    return self.evs.transaction(topic , {
+        &#34;gitpath&#34;: gitpath,
+        &#34;branch&#34;: branch  
+    })</code></pre>
+</details>
+</dd>
+<dt id="menshnet.client.Client.sensor"><code class="name flex">
+<span>def <span class="ident">sensor</span></span>(<span>self, sensor_name, cfg, evt_handler)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Return a sensor object that acts as a controller for a remote executing process.</p>
+<p>sensor_name : The name of a python package in your repo:
+<gitpath you provided in register>/modules/<sensor_name>
+cfg
+: A python dictionary containing configuration information
+obj = <gitpath you provided in register>/modules/<sensor_name>.register()
+obj.onInit(MenshnetApi, cfg ) &lt;- gets passed to onInit
+evt_handler : Instance of EventHandler which will receive events from sensor</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def sensor(self, sensor_name, cfg, evt_handler):
+    &#34;&#34;&#34;
+    Return a sensor object that acts as a controller for a remote executing process.
+             
+    sensor_name : The name of a python package in your repo:
+                 &lt;gitpath you provided in register&gt;/modules/&lt;sensor_name&gt;
+    cfg         : A python dictionary containing configuration information
+                 obj = &lt;gitpath you provided in register&gt;/modules/&lt;sensor_name&gt;.register()
+                 obj.onInit(MenshnetApi, cfg ) &lt;- gets passed to onInit
+    evt_handler : Instance of EventHandler which will receive events from sensor
+    &#34;&#34;&#34;
+    return Sensor(self.evs, sensor_name, cfg, evt_handler)</code></pre>
+</details>
+</dd>
+</dl>
+</dd>
+<dt id="menshnet.client.EventHandler"><code class="flex name class">
+<span>class <span class="ident">EventHandler</span></span>
+<span>(</span><span>*args, **kwargs)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Capture events from a running sensor on our server</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class EventHandler(object):
+    &#34;&#34;&#34;
+    Capture events from a running sensor on our server
+    &#34;&#34;&#34;
+
+    def on_error(self, errmsg, server_side_stack_trace):
+        &#34;&#34;&#34;
+        Capture error message 
+
+        errmsg -&gt; textual message describing error
+        server_side_stack_trace -&gt; either a stack trace acquired by calling
+                                   traceback.format_exc() which should pinpoint
+                                   a fault in code or None if not available. 
+        &#34;&#34;&#34;
+
+    def on_info(self, msg):
+        &#34;&#34;&#34;
+        Capture info message
+
+        ```
+           In your sensor:
+           self.api.send_info(&#34;this is a test&#34;)
+ 
+           results in this function being called with
+           msg == &#34;this is a test&#34;
+        ```
+        &#34;&#34;&#34;
+        
+
+    def on_stat(self, data):
+        &#34;&#34;&#34;
+        Capture server side statistic messages from a sensor.
+        
+        ```
+            def onInit(self, api, cfg):
+                self.api = api # save MenshnetApi
+
+            ... later in code send a stat ...
+            self.api.send_stat({&#34;ssi&#34;:score})
+
+        # receive stat message from your sensor 
+        def on_stat(self, data -&gt; {&#34;ssi&#34;:score}) 
+        ```
+        &#34;&#34;&#34;
+        
+
+    def on_alarm(self, name, active, value):
+        &#34;&#34;&#34;
+        Capture a server side alarm from your sensor.
+
+        ```
+            def onInit(self, api, cfg):
+                ... 
+                # set an alarm 
+                # add(self, name, set_threshold, clear_threshold)
+                self.api.alarms.add(&#34;frozen-video&#34;,self.threshold,self.threshold-0.05)
+
+            # ... then later the alarm is triggered when/if &#39;score&#39;
+            # exceeds set_threshold value=1 and event triggered or
+            #  
+            self.api.alarms.update(&#34;frozen-video&#34;,score) 
+        ```
+        &#34;&#34;&#34;</code></pre>
+</details>
+<h3>Methods</h3>
+<dl>
+<dt id="menshnet.client.EventHandler.on_alarm"><code class="name flex">
+<span>def <span class="ident">on_alarm</span></span>(<span>self, name, active, value)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Capture a server side alarm from your sensor.</p>
+<pre><code>    def onInit(self, api, cfg):
+        ... 
+        # set an alarm 
+        # add(self, name, set_threshold, clear_threshold)
+        self.api.alarms.add(&quot;frozen-video&quot;,self.threshold,self.threshold-0.05)
+
+    # ... then later the alarm is triggered when/if 'score'
+    # exceeds set_threshold value=1 and event triggered or
+    #  
+    self.api.alarms.update(&quot;frozen-video&quot;,score) 
+</code></pre></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def on_alarm(self, name, active, value):
+    &#34;&#34;&#34;
+    Capture a server side alarm from your sensor.
+
+    ```
+        def onInit(self, api, cfg):
+            ... 
+            # set an alarm 
+            # add(self, name, set_threshold, clear_threshold)
+            self.api.alarms.add(&#34;frozen-video&#34;,self.threshold,self.threshold-0.05)
+
+        # ... then later the alarm is triggered when/if &#39;score&#39;
+        # exceeds set_threshold value=1 and event triggered or
+        #  
+        self.api.alarms.update(&#34;frozen-video&#34;,score) 
+    ```
     &#34;&#34;&#34;</code></pre>
 </details>
 </dd>
-<dt id="menshnet.client.Client.upload"><code class="name flex">
-<span>def <span class="ident">upload</span></span>(<span>self, **kwArgs)</span>
+<dt id="menshnet.client.EventHandler.on_error"><code class="name flex">
+<span>def <span class="ident">on_error</span></span>(<span>self, errmsg, server_side_stack_trace)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Upload a stored class to menshnet</p>
-<p>upload(sensor_name="MySensor",filename="path-to-code-on-host-machine")
-upload(sensor_name="MySensor",url="http[s]://..../path-to-file",module_name="")
-upload(sensor_name="MySensor",git="git-project-path-to-clone") </p>
-<p>sensor_name: User chosen identifier that is used to start/stop
-a sensor and acts as a filter for inbound events.</p>
-<p>If filename is specified:</p>
-<pre><code>filename is a python module that will be uploaded to the server
-for future use. It will be identified on the server by the value of
-sensor_name. See Note #1 below regarding the requirements for 
-this module.
-</code></pre>
-<p>If git is specified:</p>
-<pre><code>git is the path to a git repo that will be cloned server side.
-
-module_name is the name of a file within the top level path of the
-git repo containing the server side code to be executed. See
-Note #1 below requirments for this module.
-</code></pre>
-<p>If url is specified:</p>
-<pre><code>url is an http[s] url where to download the user supplied python 
-sensor module. See Note #1 below regarding the requirements for 
-this module.
-</code></pre>
-<p>Note #1: Sensor module requirements.</p>
-<p>The user supplied sensor module must impliment a register() function.
-This function must return an instance of an object that is derived off
-of one of menshnet's predefined base classes in the server side
-sensor module. Example:</p>
-<pre><code>from sensors.vp import VideoProcessor
-
-class MySensor(VideoProcessor):
-    def onInit(self, api, cfg):
-        &quot;initialization&quot;
-
-    def onImage(self, img):
-        &quot;handle each snapshot of video&quot;
-
-
-def register():
-    return MySensor()
-
-</code></pre>
-<p>To make this function async as opposed to synchronous add the
-onUploaded(error="error message"|None) callback, if error == None
-upload was successful.</p>
-<p>upload(opUploaded=callback, &hellip;)</p></section>
+<section class="desc"><p>Capture error message </p>
+<p>errmsg -&gt; textual message describing error
+server_side_stack_trace -&gt; either a stack trace acquired by calling
+traceback.format_exc() which should pinpoint
+a fault in code or None if not available.</p></section>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def upload(self, **kwArgs):
+<pre><code class="python">def on_error(self, errmsg, server_side_stack_trace):
     &#34;&#34;&#34;
-    Upload a stored class to menshnet
+    Capture error message 
 
-    upload(sensor_name=&#34;MySensor&#34;,filename=&#34;path-to-code-on-host-machine&#34;)
-    upload(sensor_name=&#34;MySensor&#34;,url=&#34;http[s]://..../path-to-file&#34;,module_name=&#34;&#34;)
-    upload(sensor_name=&#34;MySensor&#34;,git=&#34;git-project-path-to-clone&#34;) 
+    errmsg -&gt; textual message describing error
+    server_side_stack_trace -&gt; either a stack trace acquired by calling
+                               traceback.format_exc() which should pinpoint
+                               a fault in code or None if not available. 
+    &#34;&#34;&#34;</code></pre>
+</details>
+</dd>
+<dt id="menshnet.client.EventHandler.on_info"><code class="name flex">
+<span>def <span class="ident">on_info</span></span>(<span>self, msg)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Capture info message</p>
+<pre><code>   In your sensor:
+   self.api.send_info(&quot;this is a test&quot;)
 
-
-    sensor_name: User chosen identifier that is used to start/stop
-                 a sensor and acts as a filter for inbound events.
-
-    If filename is specified:
-
-        filename is a python module that will be uploaded to the server
-        for future use. It will be identified on the server by the value of
-        sensor_name. See Note #1 below regarding the requirements for 
-        this module.
-
-    If git is specified:
-
-        git is the path to a git repo that will be cloned server side.
-        
-        module_name is the name of a file within the top level path of the
-        git repo containing the server side code to be executed. See
-        Note #1 below requirments for this module.
-
-    If url is specified:
-
-        url is an http[s] url where to download the user supplied python 
-        sensor module. See Note #1 below regarding the requirements for 
-        this module.
-
-
-
-    Note #1: Sensor module requirements.
-
-    The user supplied sensor module must impliment a register() function.
-    This function must return an instance of an object that is derived off
-    of one of menshnet&#39;s predefined base classes in the server side
-    sensor module. Example:
-
+   results in this function being called with
+   msg == &quot;this is a test&quot;
+</code></pre></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def on_info(self, msg):
+    &#34;&#34;&#34;
+    Capture info message
 
     ```
-    from sensors.vp import VideoProcessor
+       In your sensor:
+       self.api.send_info(&#34;this is a test&#34;)
 
-    class MySensor(VideoProcessor):
-        def onInit(self, api, cfg):
-            &#34;initialization&#34;
+       results in this function being called with
+       msg == &#34;this is a test&#34;
+    ```
+    &#34;&#34;&#34;</code></pre>
+</details>
+</dd>
+<dt id="menshnet.client.EventHandler.on_stat"><code class="name flex">
+<span>def <span class="ident">on_stat</span></span>(<span>self, data)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>Capture server side statistic messages from a sensor.</p>
+<pre><code>    def onInit(self, api, cfg):
+        self.api = api # save MenshnetApi
 
-        def onImage(self, img):
-            &#34;handle each snapshot of video&#34;
+    ... later in code send a stat ...
+    self.api.send_stat({&quot;ssi&quot;:score})
 
-
-    def register():
-        return MySensor()
-
-    ```    
-
-
-
-
-
-    To make this function async as opposed to synchronous add the
-    onUploaded(error=&#34;error message&#34;|None) callback, if error == None
-    upload was successful.
-
-    upload(opUploaded=callback, ...)        
+# receive stat message from your sensor 
+def on_stat(self, data -&gt; {&quot;ssi&quot;:score}) 
+</code></pre></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def on_stat(self, data):
     &#34;&#34;&#34;
-    return Upload(self, **kwArgs)</code></pre>
+    Capture server side statistic messages from a sensor.
+    
+    ```
+        def onInit(self, api, cfg):
+            self.api = api # save MenshnetApi
+
+        ... later in code send a stat ...
+        self.api.send_stat({&#34;ssi&#34;:score})
+
+    # receive stat message from your sensor 
+    def on_stat(self, data -&gt; {&#34;ssi&#34;:score}) 
+    ```
+    &#34;&#34;&#34;</code></pre>
+</details>
+</dd>
+</dl>
+</dd>
+<dt id="menshnet.client.Sensor"><code class="flex name class">
+<span>class <span class="ident">Sensor</span></span>
+<span>(</span><span>evs, sensor_name, cfg, evt_handler)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>command and control over remote sensor</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">class Sensor(object):
+    &#34;&#34;&#34; 
+    command and control over remote sensor
+    &#34;&#34;&#34;
+    def __init__(self, evs, sensor_name, cfg, evt_handler):
+        self.evs = evs 
+        self.name = sensor_name
+        self.cfg = cfg
+        self.handler = evt_handler
+        self.codeId = None
+
+
+    def stop(self): 
+        &#34;stop reunning sensor, remove inbound event routing&#34;
+        if not self.codeId:
+            Logger.warning(&#34;stop called but sensor does not appear active&#34;)
+        else:
+            topic = self.evs.topic_base()+&#34;/stop_sensor&#34; 
+            self.evs.transaction(topic , {
+                &#34;codeId&#34;: self.codeId
+            })
+            self.evs.remove_handler(self.codeId)
+            
+
+    def start(self):
+        &#34;&#34;&#34;
+        start package name &lt;self.name&gt; within the user&#39;s git 
+        project.
+        &#34;&#34;&#34;
+        topic = self.evs.topic_base()+&#34;/start_sensor&#34;
+        auth = self.evs.messenger.mqtt_auth
+        data = {
+            &#39;mqttCred&#39;: (auth[&#39;name&#39;],auth[&#39;pwhash&#39;]),
+            &#39;name&#39;: self.name,
+            &#39;cfg&#39; : self.cfg
+        }  
+        Logger.info(&#34;starting sensor %s&#34; % self.name)
+        Logger.debug(&#34;Sensor.start sending %s&#34; % str(data))
+        # start remote service get codeId from server
+        # which identfies the instance of the sensor that 
+        # is running. 
+        r = self.evs.transaction(topic , data)
+        if r.get(&#39;error&#39;):
+            self.handler.on_error(r.get(&#39;error&#39;),None)
+        else:
+            self.codeId = r.get(&#39;codeId&#39;) 
+            self.evs.add_handler(self.codeId, self.handler)
+
+        Logger.debug(&#34;Sensor.start sending %s&#34; % str(data))</code></pre>
+</details>
+<h3>Methods</h3>
+<dl>
+<dt id="menshnet.client.Sensor.start"><code class="name flex">
+<span>def <span class="ident">start</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>start package name <self.name> within the user's git
+project.</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def start(self):
+    &#34;&#34;&#34;
+    start package name &lt;self.name&gt; within the user&#39;s git 
+    project.
+    &#34;&#34;&#34;
+    topic = self.evs.topic_base()+&#34;/start_sensor&#34;
+    auth = self.evs.messenger.mqtt_auth
+    data = {
+        &#39;mqttCred&#39;: (auth[&#39;name&#39;],auth[&#39;pwhash&#39;]),
+        &#39;name&#39;: self.name,
+        &#39;cfg&#39; : self.cfg
+    }  
+    Logger.info(&#34;starting sensor %s&#34; % self.name)
+    Logger.debug(&#34;Sensor.start sending %s&#34; % str(data))
+    # start remote service get codeId from server
+    # which identfies the instance of the sensor that 
+    # is running. 
+    r = self.evs.transaction(topic , data)
+    if r.get(&#39;error&#39;):
+        self.handler.on_error(r.get(&#39;error&#39;),None)
+    else:
+        self.codeId = r.get(&#39;codeId&#39;) 
+        self.evs.add_handler(self.codeId, self.handler)
+
+    Logger.debug(&#34;Sensor.start sending %s&#34; % str(data))</code></pre>
+</details>
+</dd>
+<dt id="menshnet.client.Sensor.stop"><code class="name flex">
+<span>def <span class="ident">stop</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<section class="desc"><p>stop reunning sensor, remove inbound event routing</p></section>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def stop(self): 
+    &#34;stop reunning sensor, remove inbound event routing&#34;
+    if not self.codeId:
+        Logger.warning(&#34;stop called but sensor does not appear active&#34;)
+    else:
+        topic = self.evs.topic_base()+&#34;/stop_sensor&#34; 
+        self.evs.transaction(topic , {
+            &#34;codeId&#34;: self.codeId
+        })
+        self.evs.remove_handler(self.codeId)</code></pre>
 </details>
 </dd>
 </dl>
@@ -502,8 +737,24 @@ upload was successful.</p>
 <h4><code><a title="menshnet.client.Client" href="#menshnet.client.Client">Client</a></code></h4>
 <ul class="">
 <li><code><a title="menshnet.client.Client.connect" href="#menshnet.client.Client.connect">connect</a></code></li>
-<li><code><a title="menshnet.client.Client.load" href="#menshnet.client.Client.load">load</a></code></li>
-<li><code><a title="menshnet.client.Client.upload" href="#menshnet.client.Client.upload">upload</a></code></li>
+<li><code><a title="menshnet.client.Client.register" href="#menshnet.client.Client.register">register</a></code></li>
+<li><code><a title="menshnet.client.Client.sensor" href="#menshnet.client.Client.sensor">sensor</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="menshnet.client.EventHandler" href="#menshnet.client.EventHandler">EventHandler</a></code></h4>
+<ul class="">
+<li><code><a title="menshnet.client.EventHandler.on_alarm" href="#menshnet.client.EventHandler.on_alarm">on_alarm</a></code></li>
+<li><code><a title="menshnet.client.EventHandler.on_error" href="#menshnet.client.EventHandler.on_error">on_error</a></code></li>
+<li><code><a title="menshnet.client.EventHandler.on_info" href="#menshnet.client.EventHandler.on_info">on_info</a></code></li>
+<li><code><a title="menshnet.client.EventHandler.on_stat" href="#menshnet.client.EventHandler.on_stat">on_stat</a></code></li>
+</ul>
+</li>
+<li>
+<h4><code><a title="menshnet.client.Sensor" href="#menshnet.client.Sensor">Sensor</a></code></h4>
+<ul class="">
+<li><code><a title="menshnet.client.Sensor.start" href="#menshnet.client.Sensor.start">start</a></code></li>
+<li><code><a title="menshnet.client.Sensor.stop" href="#menshnet.client.Sensor.stop">stop</a></code></li>
 </ul>
 </li>
 </ul>
