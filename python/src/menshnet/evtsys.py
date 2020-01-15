@@ -2,21 +2,24 @@
 Networking module for library, this leverages mqtt and requests
 """
 
-import paho.mqtt.client as mqtt
 import queue
 import requests
 import json
 import threading
 import uuid
-import logging
 import os
 import sys
+import time
+
+import paho.mqtt.client as mqtt
+
 
 REMOTE_HOST="menshnet.online"
 VALIDATE_API_URL="https://menshnet.online/landing/api/access-mqtt"
 SUBSCRIBE_TIMEOUT = 15.0
+HEARTBEAT_INTERVAL = 15.0
 
-
+import logging
 Logger = logging.getLogger("menshnet")
 
 
@@ -46,6 +49,22 @@ class MqttTransaction(object):
         self.complete = threading.Event()
         self.reply = {"error": "Internal error"}
 
+    # 
+    # user defined event handlers
+    #
+    def on_result(self, mqtt_msg_payload):
+        #self.reply = mqtt_msg_payload
+        self.reply = json.loads(mqtt_msg_payload.decode())
+        
+
+    def on_success(self):
+        pass
+        
+    def on_failure(self, error):
+        Logger.error(error)
+    #############################
+    
+    
     def _on_result(self, mqtt_msg_payload):
         self.reply = json.loads(mqtt_msg_payload.decode())
 
@@ -115,15 +134,84 @@ class _SyncSubscribe:
             raise RuntimeError("trying to subscribe to %s but not connected!" % topic) 
 
         self.pending[mid] = threading.Event() 
-        logging.debug("subscription request for topic=%s mid=%d" % (topic,mid))
+        Logger.debug("subscription request for topic=%s mid=%d" % (topic,mid))
         # wait until timeout, return true is timeout
         return not self.pending[mid].wait(SUBSCRIBE_TIMEOUT)
 
     def on_subscribe(self, client, userdata, mid, granted_qos):
         lock = self.pending.get(mid)
         if lock:
-            logging.debug("subscription for mid=%d confirmed" % mid)
+            Logger.debug("subscription for mid=%d confirmed" % mid)
             lock.set()
+
+
+class EventRouter(object):
+    """
+    Capture events from the backend MenshnetApi object 
+    """
+    def __init__(self):
+        self.handlers = {}
+
+    def add(self, codeId, handler):
+        self.handlers[codeId] = handler
+
+    def remove(self, codeId): 
+        del self.handlers[codeId]
+
+    def alarm_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get('codeId')
+        h = self.handlers.get(codeId)
+        if h and getattr(h,'on_alarm') and callable(h.on_alarm):
+            data = jobj['data']
+            h.on_alarm(data['name'], data['active'], data['value'])
+        else:
+            Logger.warning("alarm codeId=%s data=%s" % (codeId,str(jobj['data'])))
+
+    def stat_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get('codeId')
+        h = self.handlers.get(codeId)
+        if h and getattr(h,'on_stat') and callable(h.on_stat):
+            h.on_alarm(jobj['data'])
+        else:
+            Logger.info("stat %s" % str(jobj))
+
+    def error_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get('codeId')
+        h = self.handlers.get(codeId)
+        if h and getattr(h,'on_error') and callable(h.on_error):
+            h.on_error(jobj['error'], jobj.get('stacktrace'))
+        else:
+            Logger.error("error %s" % str(jobj))
+    
+    def info_handler(self, client, userdata, msg):
+        jobj = json.loads(msg.payload.decode())
+        codeId = jobj.get('codeId')
+        h = self.handlers.get(codeId)
+        if h and getattr(h,'on_info') and callable(h.on_info):
+            h.on_info(jobj['msg'])
+        else:
+            Logger.info("info %s" % str(jobj))
+
+
+    def setup(self, topic_base, mqttc):
+        self.mqttc = mqttc
+        self.topic_base = topic_base
+
+        self.topic_routes = {
+            topic_base+"/alarm": self.alarm_handler,
+            topic_base+"/stat": self.stat_handler,
+            topic_base+"/error": self.error_handler,
+            topic_base+"/info": self.info_handler
+        }
+        for t, h in self.topic_routes.items(): 
+            self.mqttc.message_callback_add(t,h)
+
+    def codeIdList(self):
+        return self.handlers.keys() 
+
 
 class Messenger(object):
     def __init__(self, user):
@@ -135,7 +223,29 @@ class Messenger(object):
         self.connected.clear()     
         self.on_connected = None
         self.mqttc = None
+        self.mqtt_auth = None
         self.sync_sub = _SyncSubscribe()
+        
+        self.event_router = EventRouter()
+        self.hb_thread = threading.Thread(target=self._heartbeat,daemon=True)
+        self.hb_thread.start()
+
+    def _heartbeat(self):
+        """
+        send periodic heartbeat messages to keep sensors alive. This is done for two reasons
+        as opposed to a last will message. First the client may be alive but not responive
+        so that it is in effect *dead* also the javascript version of the mqtt client does
+        not issue a last will message consitently. 
+        """
+        while True:
+            data  = {
+                "codeIdList": self.event_router.codeIdList()
+            }
+            if len(data["codeIdList"]) > 0: 
+                topic = self.topic_base+"/heartbeat"
+                self.send(topic, data)
+                time.sleep(HEARTBEAT_INTERVAL)    
+    
 
     def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
@@ -144,6 +254,7 @@ class Messenger(object):
                 self.on_connected()
             # set connected mutex 
             self.connected.set()
+            self.event_router.setup(self.topic_base, client)
 
     def subscribe(self, topic):
         self.sync_sub.subscribe(self.mqttc, topic) 
@@ -152,11 +263,11 @@ class Messenger(object):
     def send(self, topic, data):
         if not self.mqttc:
             raise RuntimeError("connect must be called before using this method")
-        logging.debug("mqttc.publish('%s',payload='%s')" % (topic,str(data)))
+        Logger.debug("mqttc.publish('%s',payload='%s')" % (topic,str(data)))
         self.mqttc.publish(topic,payload=json.dumps(data))
 
     def on_message(self, client, userdata, msg):
-        logging.debug(msg.topic + " -> " + msg.payload.decode() )
+        Logger.debug(msg.topic + " -> " + msg.payload.decode() )
         
     def connect(self, mqtt_auth, on_connected):
         "connect to mqtt using authentication"
@@ -171,7 +282,7 @@ class Messenger(object):
         u = mqtt_auth['name']
         p = mqtt_auth['pwhash']
 
-        
+        self.mqtt_auth = mqtt_auth 
 
         self.mqttc.username_pw_set(u, p)
         self.mqttc.ws_set_options()
@@ -191,8 +302,23 @@ class EventSystem(object):
         
     def topic_base(self):
         "return base topic path allocated for this user: menshnet/client/<username>/#"
-        if self.messenger.connected.is_set():
+        if self.messenger and self.messenger.connected.is_set():
             return self.messenger.topic_base
+        else:
+            raise RuntimeError("Attempt to get topic base while not connected.")
+
+    def add_handler(self, codeId, evtHandler):
+        "route events based on a codeId"
+        if self.messenger and self.messenger.connected.is_set():        
+            self.messenger.event_router.add(codeId, evtHandler)
+        else:
+            raise RuntimeError("Attempt to add event handler while not connected")
+     
+    def remove_handler(self, codeId):
+        "remove codeId from routing"
+        if self.messenger and self.messenger.connected.is_set():        
+            self.messenger.event_router.remove(codeId)
+        
 
     def transaction(self, topic, data, timeout=15.0):
         """
@@ -229,7 +355,7 @@ class EventSystem(object):
                      }).encode('utf-8')
                      self.status_code = 200
             r = Fake_response()
-            logging.debug("Unit test mode: %s" % str(vars(r)))
+            Logger.debug("Unit test mode: %s" % str(vars(r)))
         else:
             r = requests.post(VALIDATE_API_URL, json={
                 "apiKey": apiKey,
@@ -291,7 +417,6 @@ class UnitTest(object):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(stream=sys.stdout,format="%(message)s",level=logging.DEBUG)
     UnitTest().run()
 
 
