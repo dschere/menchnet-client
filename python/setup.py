@@ -15,7 +15,7 @@ if __name__ == '__main__':
             version='1.0',
             description='Menshnet python client library',
             author='David Schere',
-            author_email='dave.avantgarde@gmail.com',
+            author_email='lightinlogic@gmail.com',
             url='https://menshnet.online/',
             packages=['menshnet'],
             package_dir={'menshnet': 'src/menshnet'},
