@@ -19,29 +19,73 @@ class Pipeline(object):
         self.client = client
         self.name = name
         self.resId = str(uuid.uuid4())
+        self.event_handlers = {}
 
-    def register(self, eventName, eventHandler):
-        """
-        register used specified event handler. The content of
-        the message is at the descretion of the user.
-        """
-        self.client.m.register(eventName, eventHandler)
+        # user can define custom handlers here for logging
+        # and exceptions.
+        self.exc_handler = None
+        self.log_handler = None
 
-    def unregister(self, eventName, eventHandler):
+    def _mqtt_handler(self, json_msg):
+        """ inbound message from running pipeline 
+
+        json_msg {
+             event_type: 'log'|'emit'
+             args: <dependant on event type>
+        }
+
+        "log"  args: (clock_time,severity,msg)
+        "emit": args: (key,value) 
         """
-        unregister event handler
-        """    
-        self.client.unregister(eventName)
+        print("_mqtt_handler %s" % str(json_msg))
+        event_type =  json_msg.get('even_type')
+        args = json_msg.get('args')
+        if event_type == 'emit':
+            (key,value) = args 
+            handler = self.event_handlers.get(key)
+            if handler:
+                handler(value)
+
+        # log message from code
+        elif event_type == 'log':
+            (clock_time_str,severity,msg) = args
+            if self.log_handler:
+                self.log_handler(args)
+            else:     
+                logfunc = getattr(self.client.logger,severity) 
+                logfunc("%16s %16s %s" % (self.name,clock_time_str,msg))
+
+        # exception thrown in client code, reraise here unless if user
+        # has provided an exception handler 
+        elif event_type == 'user_code_exception':
+            if not self.exc_handler:
+                raise RuntimeError("Remote exception from your pipeline %s: %s" % (self.name,args[0]))
+            else:
+                self.exc_handler(args[0])
+     
+    def register(self, name, handler):
+        self.event_handlers[name] = handler
+
+    def unregister(self, name):
+        if name in self.event_handlers:
+            del self.event_handlers[name] 
 
     def start(self, config):
-        # "/events/%s" % self.resId
-        # start(self, apiKey, name, resId, config)
         apiKey = self.client.apiKey
         name = self.name
-          
+                      
+        topic = "/api/events/%s" % self.resId
+        self.client.m.register(topic, self._mqtt_handler)
+        
+        return self.client.m.start(apiKey, name, self.resId, topic, config)
+        
 
     def stop(self):
-        pass
+        apiKey = self.client.apiKey
+         
+        topic = "/%s/events" % self.resId
+        self.client.m.unregister(topic)
+        return self.client.m.stop(apiKey, self.resId) 
  
 
 
@@ -122,7 +166,16 @@ def unittest():
     p.register('frozen-video',on_event)
     # register event 
     # start 
-    time.sleep(30)
+    p.start({
+        "url": "rtmp://strmr5.sha.maryland.gov/rtplive/ca014d5302510075004d823633235daa",
+        "width": 352,
+        "height": 240,
+        "depth": 1,  
+        "interval": 2
+    }) 
+
+
+    time.sleep(60)
     
          
 
