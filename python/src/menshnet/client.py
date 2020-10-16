@@ -37,8 +37,8 @@ class Pipeline(object):
         "log"  args: (clock_time,severity,msg)
         "emit": args: (key,value) 
         """
-        print("_mqtt_handler %s" % str(json_msg))
-        event_type =  json_msg.get('even_type')
+        #print("_mqtt_handler %s" % str(json_msg))
+        event_type =  json_msg.get('event_type')
         args = json_msg.get('args')
         if event_type == 'emit':
             (key,value) = args 
@@ -153,7 +153,18 @@ def unittest():
 
 
     apiKey = sys.argv[1]
-    logging.basicConfig(stream=sys.stdout,level=logging.DEBUG,format="%(message)s")    
+
+
+    def setup_logger():
+        fmt = "%(asctime)s %(thread)d %(filename)s:%(lineno)d %(levelname)s\n`"
+        fmt += "- %(message)s"
+        logging.basicConfig(stream=sys.stdout,
+            format=fmt,
+            level=logging.DEBUG
+        )
+    setup_logger()
+
+
 
 
     mc = Client(apiKey)
