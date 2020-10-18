@@ -1,0 +1,13 @@
+{
+  "name": "menshnet",
+  "version": "1.0.0",
+  "description": "client interface to Lightinlogic's hardware acceleration platform for adavnced computational computing.",
+  "main": "index.js",
+  "repository": "https://github.com/dschere/menshnet-client.git",
+  "author": "David Schere",
+  "license": "MIT",
+  "dependencies": {
+    "paho-mqtt": "^1.1.0"
+  },
+  "files": ["menshnet.js","messenger.js"]
+}
