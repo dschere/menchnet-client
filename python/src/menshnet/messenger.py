@@ -93,14 +93,15 @@ class Messenger:
 
     def unregister(self, topic):
         self.mqttc.unsubscribe(topic)
-        del self.topic_handlers[topic]
+        if topic in self.topic_handlers: 
+            del self.topic_handlers[topic]
 
-    def start(self, apiKey, name, resId, event_topic, config):
+    def start(self, name, resId, event_topic, config):
         """
         post message to gatway to kick off pipeline
         """
         r = requests.post(START_CMD, json={ 
-            "apiKey": apiKey,
+            "apiKey": self.apiKey,
             "name": name,
             "resId": resId,
             "event_topic": event_topic,
@@ -110,6 +111,20 @@ class Messenger:
             raise ValueError(r.content.decode())
         elif r.status_code != 200:
             raise RuntimeError(r.content.decode()) 
+
+    def stop(self, resId):
+        """
+        post message to gatway to kick off pipeline
+        """
+        r = requests.post(STOP_CMD, json={ 
+            "apiKey": self.apiKey,
+            "resId": resId
+        })
+        if r.status_code == 400:
+            raise ValueError(r.content.decode())
+        elif r.status_code != 200:
+            raise RuntimeError(r.content.decode()) 
+
         
 
     def setup(self, timeout=15):

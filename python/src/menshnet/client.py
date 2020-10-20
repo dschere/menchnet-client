@@ -25,6 +25,7 @@ class Pipeline(object):
         # and exceptions.
         self.exc_handler = None
         self.log_handler = None
+        
 
     def _mqtt_handler(self, json_msg):
         """ inbound message from running pipeline 
@@ -70,6 +71,11 @@ class Pipeline(object):
         if name in self.event_handlers:
             del self.event_handlers[name] 
 
+    def stop(self):
+        apiKey = self.client.apiKey
+        return self.client.m.start(self.resId)
+
+
     def start(self, config):
         apiKey = self.client.apiKey
         name = self.name
@@ -77,7 +83,7 @@ class Pipeline(object):
         topic = "/api/events/%s" % self.resId
         self.client.m.register(topic, self._mqtt_handler)
         
-        return self.client.m.start(apiKey, name, self.resId, topic, config)
+        return self.client.m.start(name, self.resId, topic, config)
         
 
     def stop(self):
@@ -153,7 +159,7 @@ def unittest():
 
 
     apiKey = sys.argv[1]
-
+    url = sys.argv[2]
 
     def setup_logger():
         fmt = "%(asctime)s %(thread)d %(filename)s:%(lineno)d %(levelname)s\n`"
@@ -178,7 +184,7 @@ def unittest():
     # register event 
     # start 
     p.start({
-        "url": "rtmp://strmr5.sha.maryland.gov/rtplive/ca014d5302510075004d823633235daa",
+        "url": url,
         "width": 352,
         "height": 240,
         "depth": 1,  
@@ -188,6 +194,7 @@ def unittest():
 
     time.sleep(60)
     
+    p.stop()
          
 
 
