@@ -37,7 +37,7 @@ const STOP_CMD       = "https://menshnet.online/api/stop";
 const HEARTBEAT_CMD  = "https://menshnet.online/api/heartbeat";
 
 const MENSHNET_ADDR = "menshnet.online";
-const MENSHNET_PORT = 9000;
+const MENSHNET_PORT = 443;
 
 function uuidv4() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -47,43 +47,90 @@ function uuidv4() {
 }
 
 class Messenger {
-    function constructor(apiKey) {
+    constructor(apiKey) {
         this.apiKey = apiKey        
-
+        this.connected = false;
+        this.handlers = {};
+        // default simple minded error handler
+        this.service_outage = function(err) {alert(err)}; 
+ 
         // for receiving events only 
         this.mqttc = new Paho.MQTT.Client(MENSHNET_ADDR, MENSHNET_PORT, uuidv4());
         
         // set callback handlers
-        this.mqttc.onMessageArrived = this.onMessageArrived;
+        this.mqttc.onMessageArrived = (message) => {
+            var topic = message.destinationName;
+            var handler = this.handlers[topic];
+            if (typeof handler !== 'undefined') {
+                handler( JSON.parse(message.payloadString) );
+            }
+        };
+
+        this.on_disconnect = null;
+
+        this.mqttc.onConnected = () => { 
+            console.log("connected to mqtt broker.");
+            this.connected = true; 
+        };
+        this.mqttc.onConnectionLost = (err) => { 
+            var errMsg = "";
+            try {
+                errMsg = err.errorMessage;
+            } catch(e) {
+            }  
+            console.log(errMsg + " disconnected from mqtt broker.");
+            this.connected = false;
+
+            if (this.on_disconnect !== null) {
+                this.on_disconnect(); // allow user to trap on disconnect events.
+            }
+        };
 
         // connect the client
-        this.mqttc.connect();
+        var conn_opts = {
+            onSuccess: this.mqttc.onConnected,
+            onFailure: this.mqttc.onConnectionLost,
+            timeout: 3 
+        };
 
-        this.handlers = {};
-        // default simple minded error handler
-        this.service_outage = function(err) {alert(err)}; 
+        if (location.protocol.startsWith("https") === true) {
+            conn_opts.useSSL = true;
+        }
+        this.mqttc.connect(conn_opts);
+
+   }
+
+    if_connected() 
+    {
+    /* if_connected().then( ... do something .. ); */  
+    return new Promise( (fullfilled, failed) => {
+            if (this.connected === true) {
+                fullfilled(); 
+            }
+
+            var poller = setInterval(() => {
+                if (this.connected === true) {
+                    clearInterval(poller);
+                    fullfilled();
+                }
+            }, 1000 );
+
+        });  
     }
 
-    function register(topic, handler) {
+    register(topic, handler) {
         this.handlers[topic] = handler;
         this.mqttc.subscribe(topic); 
     }
 
-    function unregister(topic) {
+    unregister(topic) {
         if (typeof this.handlers[topic] !== 'undefined') {
             this.mqttc.unsubscribe(topic);
             delete this.handlers[topic];
         }
     }
 
-    function onMessageArrived(message) {
-        var handler = this.handlers[message.topic];
-        if (typeof handler !== 'undefined') {
-            handler( JSON.parse(message.payloadString) );
-        }
-    }
-
-    function _json_post(url, data, on_success, on_fail) {
+    _json_post(url, data, on_success, on_fail) {
         $.ajax({
             url: url,
             type: 'post',
@@ -91,45 +138,46 @@ class Messenger {
             fail: on_fail,
             contentType: 'application/json',
             success: on_success,
-            data: JSON.stringify(_data)
+            data: JSON.stringify(data)
         });
     }
 
-    function heartbeat() {
+    heartbeat() {
         this._json_post(HEARTBEAT_CMD, { 
             "apiKey": this.apiKey
-            }
-            () => {},
-            () => {}
+            },
+            function() {},
+            function() {}
         ); 
     }
 
-    function stop(resId) {
+    stop(resId) {
         this._json_post(STOP_CMD, { 
             "apiKey": this.apiKey,
             "resId": resId
-            }
-            () => {},
-            () => {}
+            },
+            function() {},
+            function() {}
         ); 
     }
 
-    function start(name, resId, event_topic, config, on_success, on_fail) {
+    start(name, resId, event_topic, config, on_success, on_fail) {
         // validate apikey
-        this._json_post(START_CMD, {
-                "apiKey": this.apiKey,
-                "resId": resId,
-                "name": name,
-                "resId": resId,
-                "event_topic": event_topic,
-                "config": config
-            },  
+        var payload = {
+            "apiKey": this.apiKey,
+            "resId": resId,
+            "name": name,
+            "resId": resId,
+            "event_topic": event_topic,
+            "config": config
+        };
+        this._json_post(START_CMD, payload,   
             on_success, 
             on_fail
         );
     }
 
-    function setup(on_success, on_fail) {
+    setup(on_success, on_fail) {
         /*
         Setup communication for receinging events and sending
         commands.    
@@ -140,8 +188,7 @@ class Messenger {
                 "apiKey": this.apiKey 
             },  
             (data) => {
-                var jobj = JSON.parse(data);
-                on_success(jobj.result.names);
+                on_success(data.result.names);
             },
             (jqXHR, textStatus, errorThrown) => {
                 on_fail(parseInt(jqXHR.status) + ": " + jqXHR.statusText);
@@ -170,7 +217,7 @@ class Pipeline
 
         this.log_handler = (clock_time,severity,msg) => {
             console.log(this._name + " " + clock_time + "[" + severity + "]" + msg); 
-        });
+        };
 
         this.pipeline_code_exc_handler = (stacktrace) => {
             console.log(this._name + " remote code exception: \n" + stacktrace);
@@ -201,22 +248,16 @@ class Pipeline
 
     unregister(name) {
         if (typeof this.pipeline_event_handlers[name] !== 'undefined') {
-            del this.pipeline_event_handlers[name];
+            delete this.pipeline_event_handlers[name];
         }
     }
 
-    _mqtt_handler( json_msg ) {
-        var f = this.event_type_handlers[json_msg.event_type];
-        if (typeof f === "function") {
-            f(json_msg.args);
-        }
-    }
 
     /*
      stop running pipeline
      */
     stop() {
-        this.m.stop(this._name);
+        this.m.stop(this.resId);
     }
 
     /*
@@ -224,18 +265,26 @@ class Pipeline
      */
     start(config) {
         var p = new Promise( (resolution,rejection) => {
-            var event_topic = "/api/events/" + this.resId;
-            //  handle inbound events of all types for this pipeline
-            this.m.register(event_topic, this._mqtt_handler);
+            this.m.if_connected().then( ()=> {
+                var event_topic = "/api/events/" + this.resId;
+                //  handle inbound events of all types for this pipeline
+                this.m.register(event_topic, (json_msg) => {
+                    var f = this.event_type_handlers[json_msg.event_type];
+                    if (typeof f === "function") {
+                        f(json_msg.args);
+                    }
+                });
         
-            this.m.start(
-                this._name, 
-                this.resId, 
-                event_topic, 
-                config, 
-                resolution, 
-                rejection 
-            );
+                this.m.start(
+                    this._name, 
+                    this.resId, 
+                    event_topic, 
+                    config, 
+                    resolution, 
+                    rejection 
+                );
+
+           }); // if_connected ...
         });
         return p; 
     }
@@ -251,6 +300,7 @@ class MenshnetClient
         this.pipeline_names = []; 
         this.m = new Messenger(apiKey);
         this.heartbeat_timer = null;
+        this.connected = false;
     }
 
     /* Create a logical connection between this client and menshnet using 
@@ -258,14 +308,13 @@ class MenshnetClient
        and the operation successful. 
     */
     connect() {
-        var client = this;
-
         var p = new Promise( (resolution,rejection) => {
-            this.m.setup((names) = {
-                client.pipeline_names = names;
+            this.m.setup((names) => {
+                this.pipeline_names = names;
                 this.heartbeat_timer = setInterval(()=>{
                     this.m.heartbeat();                    
                 }, 15000);
+                this.connected = true;
                 resolution(); 
             }, rejection);
         });
@@ -278,7 +327,8 @@ class MenshnetClient
     */
     pipeline(name) {
         if (this.pipeline_names.indexOf(name) == -1) {
-            var "Unknown pipeline '" + name + "' must be one of the following: " 
+            var msg = "Unknown pipeline '" + name 
+                + "' must be one of the following: " 
                 + this.pipeline_names;
             throw msg;
         }

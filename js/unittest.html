@@ -1,0 +1,170 @@
+<html>
+  <head>
+    <!-- Required dependency for menshnet client -->
+    <script 
+     src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" 
+     type="text/javascript">
+    </script>
+
+    <script 
+     src="https://code.jquery.com/jquery-3.5.1.min.js" 
+     integrity="sha256-9/aliU8dGd2tb6OSsuzixeV4y/faTqgFtohetphbbj0=" 
+     crossorigin="anonymous">
+    </script>
+    
+    
+    <script src="menshnet.js"></script>
+
+
+<script>
+
+
+class App
+{
+    constructor()
+    {
+        this.pipeline = null; 
+        this.menshnet = null;
+    }
+   
+    _log_event(event_type, msg) 
+    {
+        var markup = `
+           <tr> 
+              <td>`+event_type+`</td>
+              <td>`+msg+`</td> 
+           </tr>
+        `;
+        $('#event-log').append(markup);
+    }
+
+    _start(pipeline_name, url) 
+    {
+        if (this.pipeline !== null) {
+            this.pipeline.stop(); 
+        }
+ 
+        this.pipeline = this.menshnet.pipeline(pipeline_name);
+
+        this.pipeline.log_handler = (nano_time, severity, message) => {
+            this._log_event('log', 
+               nano_time + " [" +  severity + "] " + message);
+        };
+
+        if (pipeline_name === "frozen-video-detector") {
+             this.pipeline.register('frozen-video', (val) => { 
+                 this._log_event('event', 'frozen-video detected ' + val); 
+             });
+        }
+       
+        console.log("starting pipeline"); 
+        this.pipeline.start({
+             "url": url
+        });        
+    }
+
+    setup(apiKey, pipeline_name, url) 
+    {
+        if (this.menshnet === null) {
+            // first call
+            this.menshnet = new MenshnetClient(apiKey);
+            this.menshnet.connect().then(() => { 
+                this._start(pipeline_name, url),
+                (err) => { alert(err); } 
+            });
+        } else {
+           this._start(pipeline_name, url);
+        }
+    }
+
+    stop() 
+    {
+        if (this.pipeline !== null) {
+            this.pipeline.stop();
+            this.pipeline = null;  
+            $('#event-log').html("");
+        } 
+    }
+
+}
+
+
+
+
+
+
+
+
+$(function(){
+
+var app = new App();
+
+$('#start').click(()=>{
+   var apiKey = $('#apiKey').val();
+   var url = $('#url').val();
+   var name = $('#pipeline').val();
+
+   app.setup(apiKey, name, url);
+});
+
+$('#stop').click(()=>{
+   app.stop();
+});
+
+
+});
+</script>
+
+    
+  </head>
+  <body>
+
+
+<h1>Unit test page for Menshnet Client</h1>
+<hr>
+
+<table>
+  <tr><td>ApiKey</td>
+      <td><input type="text" id="apiKey" size="24"
+          ></td>
+  </tr>
+
+  <tr><td>Video URL</td>
+       <td><input type="text" id="url" size="24"
+           ></td>
+  </tr>
+
+  <tr><td>Pipeline</td>
+      <td>
+ 
+         <select name="pipeline" id="pipeline">
+             <option value="frozen-video-detector">Frozen Video Sensor</option>
+         </select>
+
+      </td>
+  </tr>   
+    
+</table>
+
+<br>
+<button id="start">Start</button>
+<button id="stop">Stop</button>
+
+<br>
+Event Log:
+<hr>
+<table>
+  <thead>
+    <tr>
+      <th>event_type</th>
+      <th>message</th>
+    </tr>
+  </thead>
+  <tbody id="event-log">
+  </tbody>
+</table>
+
+  </body>
+</html>
+
+
